@@ -77,8 +77,12 @@ object HitTesting {
     /** Point-to-line-segment distance. */
     private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
         val ab = b - a
+        val dot = ab.x * ab.x + ab.y * ab.y
+        if (dot == 0f) {
+            return hypot((p.x - a.x).toDouble(), (p.y - a.y).toDouble()).toFloat()
+        }
         val ap = p - a
-        val t = ((ap.x * ab.x + ap.y * ab.y) / (ab.x * ab.x + ab.y * ab.y)).coerceIn(0f, 1f)
+        val t = ((ap.x * ab.x + ap.y * ab.y) / dot).coerceIn(0f, 1f)
         val closest = Offset(a.x + t * ab.x, a.y + t * ab.y)
         return hypot((p.x - closest.x).toDouble(), (p.y - closest.y).toDouble()).toFloat()
     }

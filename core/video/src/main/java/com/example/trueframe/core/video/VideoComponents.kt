@@ -1,6 +1,9 @@
 package com.example.trueframe.core.video
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -65,7 +68,8 @@ class ProxyTranscoder {
                     bufferInfo.size = extractor.readSampleData(buffer, 0)
                     if (bufferInfo.size < 0) break
                     bufferInfo.presentationTimeUs = extractor.sampleTime
-                    bufferInfo.flags = extractor.sampleFlags
+                    val isSync = (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                    bufferInfo.flags = if (isSync) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                     muxer.writeSampleData(outputTrack, buffer, bufferInfo)
                     
                     if (duration > 0) {
@@ -104,10 +108,14 @@ class ProxyReader {
      * Extracts a single frame at [frameIndex] from [proxyPath].
      * Returns the decoded Bitmap, or null on failure.
      */
-    suspend fun readFrame(proxyPath: String, frameIndex: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val retriever = android.media.MediaMetadataRetriever()
+    suspend fun readFrame(proxyPath: String, frameIndex: Int, context: Context? = null): Bitmap? = withContext(Dispatchers.IO) {
+        val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(proxyPath)
+            if (proxyPath.startsWith("content://") && context != null) {
+                retriever.setDataSource(context, Uri.parse(proxyPath))
+            } else {
+                retriever.setDataSource(proxyPath)
+            }
             // Simplified frame extraction for prototype.
             // In a production app, MediaCodec surface decoding would be used.
             val timeUs = frameIndex * 33333L // Assume ~30fps for index approximation
@@ -266,7 +274,8 @@ class AudioExtractor {
                     bufferInfo.size = extractor.readSampleData(buffer, 0)
                     if (bufferInfo.size < 0) break
                     bufferInfo.presentationTimeUs = extractor.sampleTime
-                    bufferInfo.flags = extractor.sampleFlags
+                    val isSync = (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                    bufferInfo.flags = if (isSync) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                     muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo)
                     extractor.advance()
                 }

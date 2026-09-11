@@ -24,6 +24,7 @@ private class FakeProjectDao : ProjectDao {
     }
 
     override suspend fun getById(id: Long): ProjectEntity? = null
+    override suspend fun getAll(): List<ProjectEntity> = listOf(ProjectEntity(id = 1, name = "Test Project", videoUri = "content://test"))
     override suspend fun insert(project: ProjectEntity): Long = 1L
     override suspend fun update(project: ProjectEntity) {}
     override suspend fun delete(project: ProjectEntity) {}
