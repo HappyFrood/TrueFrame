@@ -36,14 +36,18 @@ class ProxyTranscoder {
      * Should be called from a Foreground Service to prevent OS killing the process.
      * Spec: "Foreground Service to prevent OS killing transcode."
      */
-    suspend fun start(sourceUri: String, outputPath: String) = withContext(Dispatchers.IO) {
+    suspend fun start(sourceUri: String, outputPath: String, context: Context? = null) = withContext(Dispatchers.IO) {
         _state.value = TranscodeState.Progress(0f)
         isCancelled = false
         try {
             // Simplified remuxing for prototype. A full MediaCodec + OpenGL pipeline
             // is required to actually bake in rotation.
             val extractor = android.media.MediaExtractor()
-            extractor.setDataSource(sourceUri)
+            if (sourceUri.startsWith("content://") && context != null) {
+                extractor.setDataSource(context, Uri.parse(sourceUri), null)
+            } else {
+                extractor.setDataSource(sourceUri)
+            }
             val muxer = android.media.MediaMuxer(outputPath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             
             var videoTrack = -1

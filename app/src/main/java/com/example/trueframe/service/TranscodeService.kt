@@ -72,7 +72,7 @@ class TranscodeService : Service() {
                     }
                 }
             }
-            proxyTranscoder.start(sourceUri, outputPath)
+            proxyTranscoder.start(sourceUri, outputPath, this@TranscodeService)
         }
 
         return START_NOT_STICKY

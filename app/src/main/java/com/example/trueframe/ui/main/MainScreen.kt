@@ -112,7 +112,13 @@ fun MainScreen(
                                 Column {
                                     Text(text = project.name)
                                     if (project.proxyUri == null) {
-                                        Text(text = "Processing...", style = MaterialTheme.typography.bodySmall)
+                                        val progressText = if (project.id == activeProjectId && transcodeState is ProxyTranscoder.TranscodeState.Progress) {
+                                            val percent = ((transcodeState as ProxyTranscoder.TranscodeState.Progress).fraction * 100).toInt()
+                                            "Processing... $percent%"
+                                        } else {
+                                            "Processing..."
+                                        }
+                                        Text(text = progressText, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                                 Spacer(modifier = Modifier.weight(1f))
