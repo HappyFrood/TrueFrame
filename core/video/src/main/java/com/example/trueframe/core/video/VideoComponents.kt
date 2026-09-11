@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.util.LruCache
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -107,11 +108,72 @@ class ProxyTranscoder {
  */
 class ProxyReader {
 
-    /**
-     * Extracts a single frame at [frameIndex] from [proxyPath].
-     * Returns the decoded Bitmap, or null on failure.
-     */
-    suspend fun readFrame(proxyPath: String, frameIndex: Int, context: Context? = null): Bitmap? = withContext(Dispatchers.IO) {
+    class Session(private val proxyPath: String, private val context: Context? = null) {
+        private var retriever: MediaMetadataRetriever? = null
+        private val cache = LruCache<Long, Bitmap>(60)
+
+        @Synchronized
+        private fun getRetriever(): MediaMetadataRetriever {
+            if (retriever == null) {
+                val r = MediaMetadataRetriever()
+                if (proxyPath.startsWith("content://") && context != null) {
+                    r.setDataSource(context, Uri.parse(proxyPath))
+                } else {
+                    r.setDataSource(proxyPath)
+                }
+                retriever = r
+            }
+            return retriever!!
+        }
+
+        suspend fun readFrameAtTimeUs(timeUs: Long, fastSeek: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+            val quantizedUs = (timeUs / 33333L) * 33333L
+            cache.get(quantizedUs)?.let { return@withContext it }
+
+            try {
+                val r = getRetriever()
+                val option = if (fastSeek) MediaMetadataRetriever.OPTION_CLOSEST_SYNC else MediaMetadataRetriever.OPTION_CLOSEST
+                val bitmap = synchronized(this@Session) {
+                    r.getScaledFrameAtTime(quantizedUs.coerceAtLeast(0L), option, 720, 1280)
+                        ?: r.getFrameAtTime(quantizedUs.coerceAtLeast(0L), option)
+                }
+                if (bitmap != null) {
+                    cache.put(quantizedUs, bitmap)
+                }
+                bitmap
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        suspend fun getDurationMs(): Long = withContext(Dispatchers.IO) {
+            try {
+                val r = getRetriever()
+                val durationStr = synchronized(this@Session) {
+                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                }
+                durationStr?.toLongOrNull() ?: 0L
+            } catch (e: Exception) {
+                0L
+            }
+        }
+
+        fun release() {
+            synchronized(this) {
+                try {
+                    retriever?.release()
+                    retriever = null
+                } catch (e: Exception) {}
+            }
+            cache.evictAll()
+        }
+    }
+
+    suspend fun readFrame(proxyPath: String, frameIndex: Int, context: Context? = null): Bitmap? {
+        return readFrameAtTimeUs(proxyPath, frameIndex * 33333L, context)
+    }
+
+    suspend fun readFrameAtTimeUs(proxyPath: String, timeUs: Long, context: Context? = null): Bitmap? = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
         try {
             if (proxyPath.startsWith("content://") && context != null) {
@@ -119,12 +181,26 @@ class ProxyReader {
             } else {
                 retriever.setDataSource(proxyPath)
             }
-            // Simplified frame extraction for prototype.
-            // In a production app, MediaCodec surface decoding would be used.
-            val timeUs = frameIndex * 33333L // Assume ~30fps for index approximation
-            retriever.getFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
+            retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST)
         } catch (e: Exception) {
             null
+        } finally {
+            try { retriever.release() } catch (e: Exception) {}
+        }
+    }
+
+    suspend fun getDurationMs(proxyPath: String, context: Context? = null): Long = withContext(Dispatchers.IO) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            if (proxyPath.startsWith("content://") && context != null) {
+                retriever.setDataSource(context, Uri.parse(proxyPath))
+            } else {
+                retriever.setDataSource(proxyPath)
+            }
+            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            durationStr?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            0L
         } finally {
             try { retriever.release() } catch (e: Exception) {}
         }
