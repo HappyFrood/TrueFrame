@@ -1,7 +1,11 @@
 package com.example.trueframe.ui.main
 
+import android.content.Context
+import android.content.ContextWrapper
+import com.example.trueframe.core.video.ProxyTranscoder
 import com.example.trueframe.data.ProjectDao
 import com.example.trueframe.data.ProjectEntity
+import com.example.trueframe.data.ProxyCacheManager
 import com.example.trueframe.data.repository.ProjectRepository
 import junit.framework.TestCase.assertEquals
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +17,18 @@ import org.junit.Test
 class MainScreenViewModelTest {
     @Test
     fun uiState_initiallyLoading() = runTest {
-        val viewModel = MainScreenViewModel(ProjectRepository(FakeProjectDao()))
+        val fakeDao = FakeProjectDao()
+        val fakeContext = ContextWrapper(null)
+        val projectRepo = ProjectRepository(fakeDao)
+        val proxyCacheManager = ProxyCacheManager(fakeContext, fakeDao)
+        val proxyTranscoder = ProxyTranscoder()
+
+        val viewModel = MainScreenViewModel(
+            context = fakeContext,
+            projectRepository = projectRepo,
+            proxyCacheManager = proxyCacheManager,
+            proxyTranscoder = proxyTranscoder
+        )
         assertEquals(viewModel.uiState.first(), MainScreenUiState.Loading)
     }
 }
