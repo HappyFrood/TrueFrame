@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
  * OpenGL surface bakes in rotation metadata so downstream doesn't need to handle it.
  * Spec: "MediaCodec + OpenGL + MediaMuxer", "OpenGL bakes rotation."
  */
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
 class ProxyTranscoder {
 
     sealed interface TranscodeState {
@@ -22,19 +25,71 @@ class ProxyTranscoder {
     private val _state = MutableStateFlow<TranscodeState>(TranscodeState.Idle)
     val state: StateFlow<TranscodeState> = _state
 
+    @Volatile
+    private var isCancelled = false
+
     /**
      * Starts transcoding [sourceUri] into a proxy file at [outputPath].
      * Should be called from a Foreground Service to prevent OS killing the process.
      * Spec: "Foreground Service to prevent OS killing transcode."
      */
-    suspend fun start(sourceUri: String, outputPath: String) {
+    suspend fun start(sourceUri: String, outputPath: String) = withContext(Dispatchers.IO) {
         _state.value = TranscodeState.Progress(0f)
-        // TODO: MediaCodec + OpenGL pipeline implementation
-        _state.value = TranscodeState.Complete
+        isCancelled = false
+        try {
+            // Simplified remuxing for prototype. A full MediaCodec + OpenGL pipeline
+            // is required to actually bake in rotation.
+            val extractor = android.media.MediaExtractor()
+            extractor.setDataSource(sourceUri)
+            val muxer = android.media.MediaMuxer(outputPath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            
+            var videoTrack = -1
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                if (format.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
+                    videoTrack = i
+                    break
+                }
+            }
+            if (videoTrack != -1) {
+                extractor.selectTrack(videoTrack)
+                val format = extractor.getTrackFormat(videoTrack)
+                val outputTrack = muxer.addTrack(format)
+                muxer.start()
+                val buffer = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
+                val bufferInfo = android.media.MediaCodec.BufferInfo()
+                
+                val duration = try { format.getLong(android.media.MediaFormat.KEY_DURATION) } catch (e: Exception) { 0L }
+                
+                while (!isCancelled) {
+                    bufferInfo.size = extractor.readSampleData(buffer, 0)
+                    if (bufferInfo.size < 0) break
+                    bufferInfo.presentationTimeUs = extractor.sampleTime
+                    bufferInfo.flags = extractor.sampleFlags
+                    muxer.writeSampleData(outputTrack, buffer, bufferInfo)
+                    
+                    if (duration > 0) {
+                        _state.value = TranscodeState.Progress((extractor.sampleTime.toFloat() / duration).coerceIn(0f, 1f))
+                    }
+                    
+                    extractor.advance()
+                }
+                muxer.stop()
+            }
+            muxer.release()
+            extractor.release()
+            if (!isCancelled) {
+                _state.value = TranscodeState.Complete
+            } else {
+                _state.value = TranscodeState.Idle
+            }
+        } catch (e: Exception) {
+            _state.value = TranscodeState.Error(e)
+        }
     }
 
     fun cancel() {
-        // TODO: Cancel ongoing transcode
+        isCancelled = true
         _state.value = TranscodeState.Idle
     }
 }
@@ -49,9 +104,19 @@ class ProxyReader {
      * Extracts a single frame at [frameIndex] from [proxyPath].
      * Returns the decoded Bitmap, or null on failure.
      */
-    suspend fun readFrame(proxyPath: String, frameIndex: Int): Bitmap? {
-        // TODO: Use MediaCodec to seek and decode a specific frame
-        return null
+    suspend fun readFrame(proxyPath: String, frameIndex: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(proxyPath)
+            // Simplified frame extraction for prototype.
+            // In a production app, MediaCodec surface decoding would be used.
+            val timeUs = frameIndex * 33333L // Assume ~30fps for index approximation
+            retriever.getFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { retriever.release() } catch (e: Exception) {}
+        }
     }
 }
 
@@ -73,17 +138,54 @@ class FrameIndex {
     /**
      * Builds the frame index from the proxy file at [proxyPath].
      */
-    suspend fun build(proxyPath: String) {
-        // TODO: Scan video track for all frame timestamps
-        frames.clear()
+    suspend fun build(proxyPath: String) = withContext(Dispatchers.IO) {
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(proxyPath)
+            var videoTrackIndex = -1
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                if (format.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
+                    videoTrackIndex = i
+                    break
+                }
+            }
+            if (videoTrackIndex != -1) {
+                extractor.selectTrack(videoTrackIndex)
+                frames.clear()
+                var index = 0
+                while (true) {
+                    val timeUs = extractor.sampleTime
+                    if (timeUs == -1L) break
+                    frames.add(FrameInfo(index++, timeUs))
+                    extractor.advance()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            extractor.release()
+        }
     }
 
     fun getTimestampForFrame(index: Int): Long? = frames.getOrNull(index)?.presentationTimeUs
 
     fun getFrameForTimestamp(timeUs: Long): Int {
-        // Binary search for nearest frame
-        // TODO: implement
-        return 0
+        if (frames.isEmpty()) return 0
+        var low = 0
+        var high = frames.size - 1
+        while (low <= high) {
+            val mid = (low + high) / 2
+            val midVal = frames[mid].presentationTimeUs
+            if (midVal < timeUs) {
+                low = mid + 1
+            } else if (midVal > timeUs) {
+                high = mid - 1
+            } else {
+                return mid
+            }
+        }
+        return low.coerceIn(0, frames.size - 1)
     }
 }
 
@@ -137,7 +239,44 @@ class AudioExtractor {
     /**
      * Extracts the audio track from [sourceUri] into a raw audio file at [outputPath].
      */
-    suspend fun extract(sourceUri: String, outputPath: String) {
-        // TODO: Use MediaExtractor + MediaCodec to extract and decode audio
+    suspend fun extract(sourceUri: String, outputPath: String) = withContext(Dispatchers.IO) {
+        val extractor = android.media.MediaExtractor()
+        var muxer: android.media.MediaMuxer? = null
+        try {
+            extractor.setDataSource(sourceUri)
+            var audioTrackIndex = -1
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                if (format.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                    audioTrackIndex = i
+                    break
+                }
+            }
+            if (audioTrackIndex != -1) {
+                extractor.selectTrack(audioTrackIndex)
+                muxer = android.media.MediaMuxer(outputPath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                val format = extractor.getTrackFormat(audioTrackIndex)
+                val outputTrackIndex = muxer.addTrack(format)
+                muxer.start()
+                
+                val buffer = java.nio.ByteBuffer.allocate(1024 * 1024)
+                val bufferInfo = android.media.MediaCodec.BufferInfo()
+                
+                while (true) {
+                    bufferInfo.size = extractor.readSampleData(buffer, 0)
+                    if (bufferInfo.size < 0) break
+                    bufferInfo.presentationTimeUs = extractor.sampleTime
+                    bufferInfo.flags = extractor.sampleFlags
+                    muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo)
+                    extractor.advance()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            try { muxer?.stop() } catch (e: Exception) {}
+            try { muxer?.release() } catch (e: Exception) {}
+            try { extractor.release() } catch (e: Exception) {}
+        }
     }
 }

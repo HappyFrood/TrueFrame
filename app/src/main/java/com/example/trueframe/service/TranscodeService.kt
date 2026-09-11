@@ -7,7 +7,13 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import com.example.trueframe.core.video.ProxyTranscoder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * Foreground service to run video transcoding in the background.
@@ -16,6 +22,11 @@ import dagger.hilt.android.AndroidEntryPoint
  */
 @AndroidEntryPoint
 class TranscodeService : Service() {
+
+    @Inject
+    lateinit var proxyTranscoder: ProxyTranscoder
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
         const val CHANNEL_ID = "transcode_channel"
@@ -41,10 +52,35 @@ class TranscodeService : Service() {
             return START_NOT_STICKY
         }
 
-        // TODO: Launch coroutine to run ProxyTranscoder.start(sourceUri, outputPath)
-        // and update notification progress, then stopSelf() on completion.
+        serviceScope.launch {
+            launch {
+                proxyTranscoder.state.collect { state ->
+                    val manager = getSystemService(NotificationManager::class.java)
+                    when (state) {
+                        is ProxyTranscoder.TranscodeState.Progress -> {
+                            val percent = (state.fraction * 100).toInt()
+                            val updateNotification = buildNotification("Transcoding video… $percent%")
+                            manager.notify(NOTIFICATION_ID, updateNotification)
+                        }
+                        is ProxyTranscoder.TranscodeState.Complete -> {
+                            stopSelf()
+                        }
+                        is ProxyTranscoder.TranscodeState.Error -> {
+                            stopSelf()
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            proxyTranscoder.start(sourceUri, outputPath)
+        }
 
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        proxyTranscoder.cancel()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
