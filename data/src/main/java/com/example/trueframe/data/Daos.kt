@@ -34,7 +34,7 @@ interface AnnotationDao {
     @Query("SELECT * FROM annotations WHERE projectId = :projectId AND frameIndex = :frameIndex")
     fun observeForFrame(projectId: Long, frameIndex: Int): Flow<List<AnnotationEntity>>
 
-    @Query("SELECT * FROM annotations WHERE projectId = :projectId")
+    @Query("SELECT * FROM annotations WHERE projectId = :projectId ORDER BY id ASC")
     fun observeForProject(projectId: Long): Flow<List<AnnotationEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

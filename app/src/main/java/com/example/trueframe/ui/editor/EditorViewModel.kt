@@ -214,7 +214,6 @@ class EditorViewModel @Inject constructor(
         }
         shapes[shapeIndex] = updatedShape
         _uiState.update { it.copy(annotations = shapes, selectedAnnotationIndex = shapeIndex) }
-        persistShapes(shapes)
     }
 
     fun updateShapeHandle(shapeIndex: Int, handleIndex: Int, newOffset: Offset) {
@@ -250,7 +249,10 @@ class EditorViewModel @Inject constructor(
         }
         shapes[shapeIndex] = updatedShape
         _uiState.update { it.copy(annotations = shapes, selectedAnnotationIndex = shapeIndex) }
-        persistShapes(shapes)
+    }
+
+    fun persistAnnotationsOnDragEnd() {
+        persistShapes(_uiState.value.annotations)
     }
 
     private fun persistShapes(shapes: List<AnnotationShape>) {

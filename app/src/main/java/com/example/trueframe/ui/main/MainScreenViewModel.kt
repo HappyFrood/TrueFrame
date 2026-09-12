@@ -13,6 +13,7 @@ import com.example.trueframe.data.repository.ProjectRepository
 import com.example.trueframe.service.TranscodeService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +23,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,17 +78,35 @@ class MainScreenViewModel @Inject constructor(
 
     fun addProject(videoUri: String) {
         viewModelScope.launch {
-            val uri = Uri.parse(videoUri)
-            try {
-                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
-            } catch (_: Exception) {
-                // Ignore if provider doesn't support persistable permission
+            val sourceUri = Uri.parse(videoUri)
+            
+            // Copy video to durable app storage so access never expires
+            val durableUri = withContext(Dispatchers.IO) {
+                try {
+                    val importDir = File(context.filesDir, "imported_videos").apply { if (!exists()) mkdirs() }
+                    val destFile = File(importDir, "video_${System.currentTimeMillis()}.mp4")
+                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                        FileOutputStream(destFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (destFile.exists() && destFile.length() > 0) {
+                        Uri.fromFile(destFile).toString()
+                    } else {
+                        videoUri
+                    }
+                } catch (_: Exception) {
+                    videoUri
+                }
             }
 
             val retriever = MediaMetadataRetriever()
             try {
-                retriever.setDataSource(context, Uri.parse(videoUri))
+                if (durableUri.startsWith("content://")) {
+                    retriever.setDataSource(context, Uri.parse(durableUri))
+                } else {
+                    retriever.setDataSource(context, Uri.parse(durableUri))
+                }
                 val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val durationMs = durationStr?.toLongOrNull() ?: 0L
                 if (durationMs > 60_000 * 5) {
@@ -100,13 +121,13 @@ class MainScreenViewModel @Inject constructor(
             }
 
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            val projectId = projectRepository.create(name = "Video $timestamp", videoUri = videoUri)
+            val projectId = projectRepository.create(name = "Video $timestamp", videoUri = durableUri)
             
             _activeTranscodeProjectId.value = projectId
             val proxyPath = proxyCacheManager.generateProxyPath(projectId)
             
             val intent = Intent(context, TranscodeService::class.java).apply {
-                putExtra(TranscodeService.EXTRA_SOURCE_URI, videoUri)
+                putExtra(TranscodeService.EXTRA_SOURCE_URI, durableUri)
                 putExtra(TranscodeService.EXTRA_OUTPUT_PATH, proxyPath)
             }
             context.startForegroundService(intent)

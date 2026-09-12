@@ -67,6 +67,7 @@ import androidx.media3.ui.PlayerView
 import com.example.trueframe.core.annotation.AnnotationOverlay
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.HitTesting
+import com.example.trueframe.core.annotation.toPixelSpace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.OptIn
@@ -282,49 +283,56 @@ fun EditorScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { startOffset ->
-                                val shapes = currentAnnotations
-                                val handleHit = findHitHandle(shapes, startOffset, thresholdPx = 160f)
-                                if (handleHit != null) {
-                                    activeDragTarget = handleHit
-                                    activeShapeDragIndex = null
-                                    viewModel.selectAnnotation(handleHit.first)
-                                } else {
-                                    activeDragTarget = null
-                                    val shapeHit = findHitShape(shapes, startOffset)
-                                    activeShapeDragIndex = shapeHit
-                                    viewModel.selectAnnotation(shapeHit)
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                activeDragTarget?.let { (shapeIdx, handleIdx) ->
-                                    viewModel.updateShapeHandle(shapeIdx, handleIdx, change.position)
-                                } ?: activeShapeDragIndex?.let { shapeIdx ->
-                                    viewModel.offsetShape(shapeIdx, dragAmount)
-                                }
-                            },
-                            onDragEnd = {
-                                activeDragTarget = null
-                                activeShapeDragIndex = null
-                            }
-                        )
-                    }
             ) {
-                if (exoPlayer != null) {
-                    BoxWithConstraints(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val containerWidth = maxWidth
-                        val containerHeight = maxHeight
+                val containerWidth = maxWidth
+                val containerHeight = maxHeight
+                val density = LocalContext.current.resources.displayMetrics.density
+                val w = (containerWidth.value * density).coerceAtLeast(100f)
+                val h = (containerHeight.value * density).coerceAtLeast(100f)
 
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { startOffset ->
+                                    val pixelShapes = currentAnnotations.map { it.toPixelSpace(w, h) }
+                                    val handleHit = findHitHandle(pixelShapes, startOffset, thresholdPx = 160f)
+                                    if (handleHit != null) {
+                                        activeDragTarget = handleHit
+                                        activeShapeDragIndex = null
+                                        viewModel.selectAnnotation(handleHit.first)
+                                    } else {
+                                        activeDragTarget = null
+                                        val shapeHit = findHitShape(pixelShapes, startOffset)
+                                        activeShapeDragIndex = shapeHit
+                                        viewModel.selectAnnotation(shapeHit)
+                                    }
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val normPos = Offset(change.position.x / w, change.position.y / h)
+                                    val normDelta = Offset(dragAmount.x / w, dragAmount.y / h)
+
+                                    activeDragTarget?.let { (shapeIdx, handleIdx) ->
+                                        viewModel.updateShapeHandle(shapeIdx, handleIdx, normPos)
+                                    } ?: activeShapeDragIndex?.let { shapeIdx ->
+                                        viewModel.offsetShape(shapeIdx, normDelta)
+                                    }
+                                },
+                                onDragEnd = {
+                                    activeDragTarget = null
+                                    activeShapeDragIndex = null
+                                    viewModel.persistAnnotationsOnDragEnd()
+                                }
+                            )
+                        }
+                ) {
+                    if (exoPlayer != null) {
                         val videoSize = exoPlayer.videoSize
                         val rawWidth = if (videoSize.width > 0) videoSize.width.toFloat() else 1080f
                         val rawHeight = if (videoSize.height > 0) videoSize.height.toFloat() else 1920f
@@ -359,23 +367,24 @@ fun EditorScreen(
                             },
                             modifier = Modifier.size(viewWidth, viewHeight)
                         )
-                    }
-                } else {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        if (uiState.error != null) {
-                            Text("Error: ${uiState.error}")
-                        } else {
-                            Text("Loading video...")
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            if (uiState.error != null) {
+                                Text("Error: ${uiState.error}")
+                            } else {
+                                Text("Loading video...")
+                            }
                         }
                     }
-                }
 
-                // Vector Annotation Canvas layered directly on top
-                AnnotationOverlay(
-                    shapes = uiState.annotations,
-                    selectedIndex = uiState.selectedAnnotationIndex,
-                    modifier = Modifier.fillMaxSize()
-                )
+                    // Vector Annotation Canvas layered directly on top
+                    AnnotationOverlay(
+                        shapes = uiState.annotations,
+                        selectedIndex = uiState.selectedAnnotationIndex,
+                        showHandles = (!isPlaying),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }

@@ -30,25 +30,31 @@ fun AnnotationOverlay(
     strokeWidth: Float = 10f,
 ) {
     Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+
         shapes.forEachIndexed { index, shape ->
             val isSelected = (index == selectedIndex)
             val stroke = if (isSelected) strokeWidth * 1.3f else strokeWidth
 
-            when (shape) {
+            val pixelShape = shape.toPixelSpace(w, h)
+
+            when (pixelShape) {
                 is AnnotationShape.Line -> drawAnnotationLine(
-                    line = shape,
+                    line = pixelShape,
                     color = if (isSelected) selectedColor else lineColor,
                     strokeWidth = stroke,
                     showHandles = showHandles
                 )
                 is AnnotationShape.Angle -> drawAnnotationAngle(
-                    angle = shape,
+                    angle = pixelShape,
                     color = if (isSelected) selectedColor else angleColor,
                     strokeWidth = stroke,
                     showHandles = showHandles
                 )
                 is AnnotationShape.Circle -> drawAnnotationCircle(
-                    circle = shape,
+                    circle = pixelShape,
                     color = if (isSelected) selectedColor else circleColor,
                     strokeWidth = stroke,
                     showHandles = showHandles
@@ -56,6 +62,14 @@ fun AnnotationOverlay(
             }
         }
     }
+}
+
+private fun Offset.toPixel(w: Float, h: Float): Offset = Offset(x * w, y * h)
+
+fun AnnotationShape.toPixelSpace(w: Float, h: Float): AnnotationShape = when (this) {
+    is AnnotationShape.Line -> AnnotationShape.Line(start.toPixel(w, h), end.toPixel(w, h))
+    is AnnotationShape.Angle -> AnnotationShape.Angle(start.toPixel(w, h), center.toPixel(w, h), end.toPixel(w, h))
+    is AnnotationShape.Circle -> AnnotationShape.Circle(center.toPixel(w, h), radius * ((w + h) / 2f))
 }
 
 private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float = 24f) {
