@@ -75,6 +75,14 @@ class MainScreenViewModel @Inject constructor(
 
     fun addProject(videoUri: String) {
         viewModelScope.launch {
+            val uri = Uri.parse(videoUri)
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (_: Exception) {
+                // Ignore if provider doesn't support persistable permission
+            }
+
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(context, Uri.parse(videoUri))

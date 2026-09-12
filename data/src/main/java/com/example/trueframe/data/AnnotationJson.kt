@@ -18,8 +18,16 @@ object OffsetSerializer : KSerializer<Offset> {
     }
     override fun deserialize(decoder: Decoder): Offset {
         val string = decoder.decodeString()
-        val parts = string.split(",")
-        return Offset(parts[0].toFloat(), parts[1].toFloat())
+        return try {
+            val parts = string.split(",")
+            if (parts.size >= 2) {
+                Offset(parts[0].toFloat(), parts[1].toFloat())
+            } else {
+                Offset.Zero
+            }
+        } catch (_: Exception) {
+            Offset.Zero
+        }
     }
 }
 
@@ -67,7 +75,11 @@ object AnnotationJson {
         return format.encodeToString(SerializableShape.serializer(), shape.toSerializable())
     }
 
-    fun deserialize(jsonString: String): AnnotationShape {
-        return format.decodeFromString(SerializableShape.serializer(), jsonString).toAnnotationShape()
+    fun deserialize(jsonString: String): AnnotationShape? {
+        return try {
+            format.decodeFromString(SerializableShape.serializer(), jsonString).toAnnotationShape()
+        } catch (_: Exception) {
+            null
+        }
     }
 }

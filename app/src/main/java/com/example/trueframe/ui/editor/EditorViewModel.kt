@@ -8,6 +8,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.video.ProxyReader
+import com.example.trueframe.data.AnnotationDao
+import com.example.trueframe.data.AnnotationEntity
+import com.example.trueframe.data.AnnotationJson
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,6 +28,7 @@ data class EditorUiState(
     val videoUri: String? = null,
     val currentFrame: Bitmap? = null,
     val frameIndex: Int = 0,
+    val frameRate: Float = 30f,
     val currentTimeMs: Long = 0L,
     val totalDurationMs: Long = 0L,
     val isPlaying: Boolean = false,
@@ -33,13 +37,16 @@ data class EditorUiState(
     val annotations: List<AnnotationShape> = emptyList(),
     val selectedAnnotationIndex: Int? = null,
     val error: String? = null,
-)
+) {
+    val frameIntervalMs: Long get() = (1000f / frameRate.coerceAtLeast(1f)).toLong().coerceAtLeast(1L)
+}
 
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val savedStateHandle: SavedStateHandle,
     private val projectRepository: ProjectRepository,
+    private val annotationDao: AnnotationDao,
 ) : ViewModel() {
 
     private var projectId: Long = -1L
@@ -64,10 +71,18 @@ class EditorViewModel @Inject constructor(
                 val currentSession = ProxyReader.Session(uri, context)
                 session = currentSession
                 val duration = currentSession.getDurationMs()
-                _uiState.update { it.copy(videoUri = uri, totalDurationMs = duration) }
+                val fps = currentSession.getFrameRate()
+                _uiState.update { it.copy(videoUri = uri, totalDurationMs = duration, frameRate = fps) }
                 loadFrameAtTime(0L)
             } else {
                 _uiState.update { it.copy(error = "Project not found") }
+            }
+        }
+
+        viewModelScope.launch {
+            annotationDao.observeForProject(id).collect { entities ->
+                val shapes = entities.mapNotNull { AnnotationJson.deserialize(it.serializedData) }
+                _uiState.update { it.copy(annotations = shapes) }
             }
         }
     }
@@ -79,14 +94,16 @@ class EditorViewModel @Inject constructor(
     fun stepFrames(delta: Int) {
         pausePlayback()
         val currentMs = _uiState.value.currentTimeMs
-        val newMs = (currentMs + (delta * 33L)).coerceIn(0L, _uiState.value.totalDurationMs.coerceAtLeast(1000L))
+        val stepMs = delta * _uiState.value.frameIntervalMs
+        val newMs = (currentMs + stepMs).coerceIn(0L, _uiState.value.totalDurationMs.coerceAtLeast(1000L))
         loadFrameAtTime(newMs, fastSeek = false)
     }
 
     fun seekToMs(timeMs: Long, isScrubbing: Boolean = false) {
         pausePlayback()
         val clampedMs = timeMs.coerceIn(0L, _uiState.value.totalDurationMs.coerceAtLeast(1000L))
-        _uiState.update { it.copy(currentTimeMs = clampedMs, frameIndex = (clampedMs / 33L).toInt()) }
+        val interval = _uiState.value.frameIntervalMs
+        _uiState.update { it.copy(currentTimeMs = clampedMs, frameIndex = (clampedMs / interval).toInt()) }
         loadFrameAtTime(clampedMs, fastSeek = isScrubbing)
     }
 
@@ -127,7 +144,8 @@ class EditorViewModel @Inject constructor(
         frameLoadJob = viewModelScope.launch {
             val bitmap = currentSession.readFrameAtTimeUs(timeMs * 1000L, fastSeek = fastSeek)
             if (bitmap != null) {
-                val frameIdx = (timeMs / 33L).toInt()
+                val interval = _uiState.value.frameIntervalMs
+                val frameIdx = (timeMs / interval).toInt()
                 _uiState.update {
                     it.copy(
                         currentFrame = bitmap,
@@ -150,42 +168,34 @@ class EditorViewModel @Inject constructor(
     }
 
     fun addLine() {
-        val center = Offset(500f, 600f)
-        val line = AnnotationShape.Line(center - Offset(150f, 0f), center + Offset(150f, 0f))
-        val newIndex = _uiState.value.annotations.size
-        _uiState.update {
-            it.copy(
-                annotations = it.annotations + line,
-                selectedAnnotationIndex = newIndex,
-            )
-        }
+        val line = AnnotationShape.Line(Offset(0.3f, 0.5f), Offset(0.7f, 0.5f))
+        saveNewShape(line, "line")
     }
 
     fun addAngle() {
-        val vertex = Offset(500f, 600f)
         val angle = AnnotationShape.Angle(
-            start = vertex + Offset(-150f, -100f),
-            center = vertex,
-            end = vertex + Offset(150f, -100f),
+            start = Offset(0.3f, 0.4f),
+            center = Offset(0.5f, 0.5f),
+            end = Offset(0.7f, 0.4f),
         )
-        val newIndex = _uiState.value.annotations.size
-        _uiState.update {
-            it.copy(
-                annotations = it.annotations + angle,
-                selectedAnnotationIndex = newIndex,
-            )
-        }
+        saveNewShape(angle, "angle")
     }
 
     fun addCircle() {
-        val center = Offset(500f, 600f)
-        val circle = AnnotationShape.Circle(center, 150f)
-        val newIndex = _uiState.value.annotations.size
-        _uiState.update {
-            it.copy(
-                annotations = it.annotations + circle,
-                selectedAnnotationIndex = newIndex,
+        val circle = AnnotationShape.Circle(Offset(0.5f, 0.5f), 0.15f)
+        saveNewShape(circle, "circle")
+    }
+
+    private fun saveNewShape(shape: AnnotationShape, shapeType: String) {
+        viewModelScope.launch {
+            val json = AnnotationJson.serialize(shape)
+            val entity = AnnotationEntity(
+                projectId = projectId,
+                frameIndex = _uiState.value.frameIndex,
+                shapeType = shapeType,
+                serializedData = json,
             )
+            annotationDao.insert(entity)
         }
     }
 
@@ -204,6 +214,7 @@ class EditorViewModel @Inject constructor(
         }
         shapes[shapeIndex] = updatedShape
         _uiState.update { it.copy(annotations = shapes, selectedAnnotationIndex = shapeIndex) }
+        persistShapes(shapes)
     }
 
     fun updateShapeHandle(shapeIndex: Int, handleIndex: Int, newOffset: Offset) {
@@ -231,7 +242,7 @@ class EditorViewModel @Inject constructor(
                     0 -> shape.copy(center = newOffset)
                     1 -> {
                         val newRadius = hypot((newOffset.x - shape.center.x).toDouble(), (newOffset.y - shape.center.y).toDouble()).toFloat()
-                        shape.copy(radius = newRadius.coerceAtLeast(20f))
+                        shape.copy(radius = newRadius.coerceAtLeast(0.02f))
                     }
                     else -> shape
                 }
@@ -239,6 +250,27 @@ class EditorViewModel @Inject constructor(
         }
         shapes[shapeIndex] = updatedShape
         _uiState.update { it.copy(annotations = shapes, selectedAnnotationIndex = shapeIndex) }
+        persistShapes(shapes)
+    }
+
+    private fun persistShapes(shapes: List<AnnotationShape>) {
+        viewModelScope.launch {
+            annotationDao.deleteAllForProject(projectId)
+            shapes.forEach { shape ->
+                val typeStr = when (shape) {
+                    is AnnotationShape.Line -> "line"
+                    is AnnotationShape.Angle -> "angle"
+                    is AnnotationShape.Circle -> "circle"
+                }
+                val entity = AnnotationEntity(
+                    projectId = projectId,
+                    frameIndex = _uiState.value.frameIndex,
+                    shapeType = typeStr,
+                    serializedData = AnnotationJson.serialize(shape),
+                )
+                annotationDao.insert(entity)
+            }
+        }
     }
 
     fun deleteSelectedAnnotation() {
@@ -252,10 +284,14 @@ class EditorViewModel @Inject constructor(
                     selectedAnnotationIndex = null,
                 )
             }
+            persistShapes(shapes)
         }
     }
 
     fun clearAllAnnotations() {
         _uiState.update { it.copy(annotations = emptyList(), selectedAnnotationIndex = null) }
+        viewModelScope.launch {
+            annotationDao.deleteAllForProject(projectId)
+        }
     }
 }

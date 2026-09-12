@@ -37,7 +37,7 @@ class ProxyCacheManager @Inject constructor(
      * Gets the directory used for storing proxy files.
      */
     fun getCacheDir(): File {
-        val dir = File(context.cacheDir, "proxy_videos")
+        val dir = File(context.noBackupFilesDir, "proxy_videos")
         if (!dir.exists()) {
             dir.mkdirs()
         }

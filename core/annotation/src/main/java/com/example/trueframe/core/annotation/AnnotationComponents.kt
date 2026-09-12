@@ -25,12 +25,13 @@ sealed interface AnnotationShape {
         val center: Offset,
         val end: Offset,
     ) : AnnotationShape {
-        /** Angle in degrees between the two rays. */
+        /** Angle in degrees between the two rays (interior angle, 0..180°). */
         fun degrees(): Float {
             val a1 = atan2((start.y - center.y).toDouble(), (start.x - center.x).toDouble())
             val a2 = atan2((end.y - center.y).toDouble(), (end.x - center.x).toDouble())
             var angle = Math.toDegrees(a2 - a1).toFloat()
             if (angle < 0) angle += 360f
+            if (angle > 180f) angle = 360f - angle
             return angle
         }
     }

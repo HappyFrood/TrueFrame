@@ -158,6 +158,22 @@ class ProxyReader {
             }
         }
 
+        suspend fun getFrameRate(): Float = withContext(Dispatchers.IO) {
+            try {
+                val r = getRetriever()
+                val captureRateStr = synchronized(this@Session) {
+                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                }
+                val captureRate = captureRateStr?.toFloatOrNull()
+                if (captureRate != null && captureRate > 0) {
+                    return@withContext captureRate
+                }
+                30f
+            } catch (e: Exception) {
+                30f
+            }
+        }
+
         fun release() {
             synchronized(this) {
                 try {
