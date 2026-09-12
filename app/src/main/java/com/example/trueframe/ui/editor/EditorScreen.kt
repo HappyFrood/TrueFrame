@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -286,21 +287,45 @@ fun EditorScreen(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(1f),
+                contentAlignment = Alignment.Center
             ) {
                 val containerWidth = maxWidth
                 val containerHeight = maxHeight
                 val density = LocalContext.current.resources.displayMetrics.density
-                val w = (containerWidth.value * density).coerceAtLeast(100f)
-                val h = (containerHeight.value * density).coerceAtLeast(100f)
+
+                val videoSize = exoPlayer?.videoSize
+                val rawWidth = if (videoSize != null && videoSize.width > 0) videoSize.width.toFloat() else 1080f
+                val rawHeight = if (videoSize != null && videoSize.height > 0) videoSize.height.toFloat() else 1920f
+
+                val isSideways = (uiState.rotationDegrees == 90 || uiState.rotationDegrees == 270)
+
+                val effectiveWidth = if (isSideways) rawHeight else rawWidth
+                val effectiveHeight = if (isSideways) rawWidth else rawHeight
+
+                val videoAspect = effectiveWidth / effectiveHeight
+                val containerAspect = containerWidth.value / containerHeight.value
+
+                val (fittedWidthDp, fittedHeightDp) = if (videoAspect > containerAspect) {
+                    Pair(containerWidth, containerWidth / videoAspect)
+                } else {
+                    Pair(containerHeight * videoAspect, containerHeight)
+                }
+
+                val vw = (fittedWidthDp.value * density).coerceAtLeast(100f)
+                val vh = (fittedHeightDp.value * density).coerceAtLeast(100f)
+                val aspectCorrection = vh / vw
+
+                val viewWidthDp = if (isSideways) fittedHeightDp else fittedWidthDp
+                val viewHeightDp = if (isSideways) fittedWidthDp else fittedHeightDp
 
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .size(fittedWidthDp, fittedHeightDp)
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { startOffset ->
-                                    val pixelShapes = currentAnnotations.map { it.toPixelSpace(w, h) }
+                                    val pixelShapes = currentAnnotations.map { it.toPixelSpace(vw, vh) }
                                     val handleHit = findHitHandle(pixelShapes, startOffset, thresholdPx = 160f)
                                     if (handleHit != null) {
                                         activeDragTarget = handleHit
@@ -315,11 +340,11 @@ fun EditorScreen(
                                 },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    val normPos = Offset(change.position.x / w, change.position.y / h)
-                                    val normDelta = Offset(dragAmount.x / w, dragAmount.y / h)
+                                    val normPos = Offset(change.position.x / vw, change.position.y / vh)
+                                    val normDelta = Offset(dragAmount.x / vw, dragAmount.y / vh)
 
                                     activeDragTarget?.let { (shapeIdx, handleIdx) ->
-                                        viewModel.updateShapeHandle(shapeIdx, handleIdx, normPos)
+                                        viewModel.updateShapeHandle(shapeIdx, handleIdx, normPos, aspectCorrection = aspectCorrection)
                                     } ?: activeShapeDragIndex?.let { shapeIdx ->
                                         viewModel.offsetShape(shapeIdx, normDelta)
                                     }
@@ -333,39 +358,28 @@ fun EditorScreen(
                         }
                 ) {
                     if (exoPlayer != null) {
-                        val videoSize = exoPlayer.videoSize
-                        val rawWidth = if (videoSize.width > 0) videoSize.width.toFloat() else 1080f
-                        val rawHeight = if (videoSize.height > 0) videoSize.height.toFloat() else 1920f
-
-                        val isSideways = (uiState.rotationDegrees == 90 || uiState.rotationDegrees == 270)
-
-                        val effectiveWidth = if (isSideways) rawHeight else rawWidth
-                        val effectiveHeight = if (isSideways) rawWidth else rawHeight
-
-                        val videoAspect = effectiveWidth / effectiveHeight
-                        val containerAspect = containerWidth.value / containerHeight.value
-
-                        val (fittedWidth, fittedHeight) = if (videoAspect > containerAspect) {
-                            Pair(containerWidth, containerWidth / videoAspect)
-                        } else {
-                            Pair(containerHeight * videoAspect, containerHeight)
-                        }
-
-                        val viewWidth = if (isSideways) fittedHeight else fittedWidth
-                        val viewHeight = if (isSideways) fittedWidth else fittedHeight
-
                         AndroidView(
                             factory = { ctx ->
                                 TextureView(ctx).apply {
                                     exoPlayer.setVideoTextureView(this)
-                                    setOnTouchListener { _, _ -> true }
+                                    isClickable = false
+                                    isFocusable = false
                                 }
                             },
                             update = { view ->
                                 exoPlayer.setVideoTextureView(view)
                                 view.rotation = uiState.rotationDegrees.toFloat()
                             },
-                            modifier = Modifier.size(viewWidth, viewHeight)
+                            modifier = Modifier
+                                .size(viewWidthDp, viewHeightDp)
+                                .pointerInput(Unit) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                }
                         )
                     } else {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -377,7 +391,7 @@ fun EditorScreen(
                         }
                     }
 
-                    // Vector Annotation Canvas layered directly on top
+                    // Vector Annotation Canvas layered directly on top of video
                     AnnotationOverlay(
                         shapes = uiState.annotations,
                         selectedIndex = uiState.selectedAnnotationIndex,

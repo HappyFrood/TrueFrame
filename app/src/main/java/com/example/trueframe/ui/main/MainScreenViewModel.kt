@@ -79,11 +79,31 @@ class MainScreenViewModel @Inject constructor(
     fun addProject(videoUri: String) {
         viewModelScope.launch {
             val sourceUri = Uri.parse(videoUri)
-            
-            // Copy video to durable app storage so access never expires
+
+            // 1. Read metadata on Dispatchers.IO BEFORE copying file to prevent leaking multi-GB rejected files
+            val isTooLong = withContext(Dispatchers.IO) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, sourceUri)
+                    val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    val durationMs = durationStr?.toLongOrNull() ?: 0L
+                    durationMs > 60_000 * 5
+                } catch (_: Exception) {
+                    false
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
+            }
+
+            if (isTooLong) {
+                _projectsError.update { "Video is too long! Max 5 minutes allowed." }
+                return@launch
+            }
+
+            // 2. Copy video to durable app storage (noBackupFilesDir) so access never expires
             val durableUri = withContext(Dispatchers.IO) {
                 try {
-                    val importDir = File(context.filesDir, "imported_videos").apply { if (!exists()) mkdirs() }
+                    val importDir = File(context.noBackupFilesDir, "imported_videos").apply { if (!exists()) mkdirs() }
                     val destFile = File(importDir, "video_${System.currentTimeMillis()}.mp4")
                     context.contentResolver.openInputStream(sourceUri)?.use { input ->
                         FileOutputStream(destFile).use { output ->
@@ -98,26 +118,6 @@ class MainScreenViewModel @Inject constructor(
                 } catch (_: Exception) {
                     videoUri
                 }
-            }
-
-            val retriever = MediaMetadataRetriever()
-            try {
-                if (durableUri.startsWith("content://")) {
-                    retriever.setDataSource(context, Uri.parse(durableUri))
-                } else {
-                    retriever.setDataSource(context, Uri.parse(durableUri))
-                }
-                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                val durationMs = durationStr?.toLongOrNull() ?: 0L
-                if (durationMs > 60_000 * 5) {
-                    _projectsError.update { "Video is too long! Max 5 minutes allowed." }
-                    return@launch
-                }
-            } catch (e: Exception) {
-                _projectsError.update { "Failed to read video metadata." }
-                return@launch
-            } finally {
-                retriever.release()
             }
 
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -137,9 +137,16 @@ class MainScreenViewModel @Inject constructor(
     fun deleteProject(project: ProjectEntity) {
         viewModelScope.launch {
             projectRepository.delete(project)
-            project.proxyUri?.let { proxyUri ->
-                val file = File(proxyUri)
-                if (file.exists()) file.delete()
+            withContext(Dispatchers.IO) {
+                val videoPath = project.videoUri.removePrefix("file://")
+                val videoFile = File(videoPath)
+                if (videoFile.exists()) videoFile.delete()
+
+                project.proxyUri?.let { proxyUri ->
+                    val proxyPath = proxyUri.removePrefix("file://")
+                    val proxyFile = File(proxyPath)
+                    if (proxyFile.exists()) proxyFile.delete()
+                }
             }
         }
     }

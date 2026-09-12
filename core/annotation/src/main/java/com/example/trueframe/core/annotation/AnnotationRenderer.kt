@@ -69,7 +69,7 @@ private fun Offset.toPixel(w: Float, h: Float): Offset = Offset(x * w, y * h)
 fun AnnotationShape.toPixelSpace(w: Float, h: Float): AnnotationShape = when (this) {
     is AnnotationShape.Line -> AnnotationShape.Line(start.toPixel(w, h), end.toPixel(w, h))
     is AnnotationShape.Angle -> AnnotationShape.Angle(start.toPixel(w, h), center.toPixel(w, h), end.toPixel(w, h))
-    is AnnotationShape.Circle -> AnnotationShape.Circle(center.toPixel(w, h), radius * ((w + h) / 2f))
+    is AnnotationShape.Circle -> AnnotationShape.Circle(center.toPixel(w, h), radius * w)
 }
 
 private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float = 24f) {
