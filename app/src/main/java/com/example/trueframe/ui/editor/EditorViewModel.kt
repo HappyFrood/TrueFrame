@@ -22,11 +22,13 @@ import javax.inject.Inject
 import kotlin.math.hypot
 
 data class EditorUiState(
+    val videoUri: String? = null,
     val currentFrame: Bitmap? = null,
     val frameIndex: Int = 0,
     val currentTimeMs: Long = 0L,
     val totalDurationMs: Long = 0L,
     val isPlaying: Boolean = false,
+    val playbackSpeed: Float = 1.0f,
     val rotationDegrees: Int = 0,
     val annotations: List<AnnotationShape> = emptyList(),
     val selectedAnnotationIndex: Int? = null,
@@ -57,11 +59,12 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             val project = projectRepository.getById(projectId)
             if (project != null) {
-                videoUri = project.proxyUri ?: project.videoUri
-                val currentSession = ProxyReader.Session(videoUri!!, context)
+                val uri = project.proxyUri ?: project.videoUri
+                videoUri = uri
+                val currentSession = ProxyReader.Session(uri, context)
                 session = currentSession
                 val duration = currentSession.getDurationMs()
-                _uiState.update { it.copy(totalDurationMs = duration) }
+                _uiState.update { it.copy(videoUri = uri, totalDurationMs = duration) }
                 loadFrameAtTime(0L)
             } else {
                 _uiState.update { it.copy(error = "Project not found") }

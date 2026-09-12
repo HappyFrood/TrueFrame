@@ -60,6 +60,10 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
 
+  // Media3 ExoPlayer
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.ui)
+
   // Arch Components
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.viewmodel.compose)

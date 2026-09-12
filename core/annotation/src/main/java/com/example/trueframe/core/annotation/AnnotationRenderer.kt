@@ -22,6 +22,7 @@ fun AnnotationOverlay(
     shapes: List<AnnotationShape>,
     modifier: Modifier = Modifier,
     selectedIndex: Int? = null,
+    showHandles: Boolean = true,
     lineColor: Color = Color(0xFFFF6D00),
     angleColor: Color = Color(0xFF00E676),
     circleColor: Color = Color(0xFF448AFF),
@@ -37,17 +38,20 @@ fun AnnotationOverlay(
                 is AnnotationShape.Line -> drawAnnotationLine(
                     line = shape,
                     color = if (isSelected) selectedColor else lineColor,
-                    strokeWidth = stroke
+                    strokeWidth = stroke,
+                    showHandles = showHandles
                 )
                 is AnnotationShape.Angle -> drawAnnotationAngle(
                     angle = shape,
                     color = if (isSelected) selectedColor else angleColor,
-                    strokeWidth = stroke
+                    strokeWidth = stroke,
+                    showHandles = showHandles
                 )
                 is AnnotationShape.Circle -> drawAnnotationCircle(
                     circle = shape,
                     color = if (isSelected) selectedColor else circleColor,
-                    strokeWidth = stroke
+                    strokeWidth = stroke,
+                    showHandles = showHandles
                 )
             }
         }
@@ -65,6 +69,7 @@ private fun DrawScope.drawAnnotationLine(
     line: AnnotationShape.Line,
     color: Color,
     strokeWidth: Float,
+    showHandles: Boolean,
 ) {
     drawLine(
         color = color,
@@ -73,24 +78,27 @@ private fun DrawScope.drawAnnotationLine(
         strokeWidth = strokeWidth,
         cap = StrokeCap.Round,
     )
-    // Draw control handles
-    drawHandle(line.start, color)
-    drawHandle(line.end, color)
+    if (showHandles) {
+        drawHandle(line.start, color)
+        drawHandle(line.end, color)
+    }
 }
 
 private fun DrawScope.drawAnnotationAngle(
     angle: AnnotationShape.Angle,
     color: Color,
     strokeWidth: Float,
+    showHandles: Boolean,
 ) {
     // Draw rays
     drawLine(color = color, start = angle.center, end = angle.start, strokeWidth = strokeWidth, cap = StrokeCap.Round)
     drawLine(color = color, start = angle.center, end = angle.end, strokeWidth = strokeWidth, cap = StrokeCap.Round)
 
-    // Draw handles
-    drawHandle(angle.start, color)
-    drawHandle(angle.center, color, radius = 22f) // Vertex is slightly larger
-    drawHandle(angle.end, color)
+    if (showHandles) {
+        drawHandle(angle.start, color)
+        drawHandle(angle.center, color, radius = 24f) // Vertex is slightly larger
+        drawHandle(angle.end, color)
+    }
 
     // Render angle text in degrees
     val degrees = angle.degrees()
@@ -111,6 +119,7 @@ private fun DrawScope.drawAnnotationCircle(
     circle: AnnotationShape.Circle,
     color: Color,
     strokeWidth: Float,
+    showHandles: Boolean,
 ) {
     drawCircle(
         color = color,
@@ -118,7 +127,8 @@ private fun DrawScope.drawAnnotationCircle(
         center = circle.center,
         style = Stroke(width = strokeWidth),
     )
-    // Center handle & edge handle
-    drawHandle(circle.center, color)
-    drawHandle(circle.center + Offset(circle.radius, 0f), color)
+    if (showHandles) {
+        drawHandle(circle.center, color)
+        drawHandle(circle.center + Offset(circle.radius, 0f), color)
+    }
 }
