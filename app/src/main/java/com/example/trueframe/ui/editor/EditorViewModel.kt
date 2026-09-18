@@ -10,17 +10,18 @@ import com.example.trueframe.data.AnnotationEntity
 import com.example.trueframe.data.AnnotationJson
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class AnnotationItem(val id: Long, val frameIndex: Int, val shape: AnnotationShape)
 
@@ -40,7 +41,6 @@ data class EditorUiState(
     val frameIntervalMs: Float get() = FrameMath.intervalMs(frameRate)
 }
 
-@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
@@ -53,10 +53,10 @@ class EditorViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
 
-    private val _frameIndexFlow = MutableStateFlow(0)
-
     @Volatile private var dragUntilMs = 0L
     private val DRAG_LATCH_MS = 2_000L
+
+    private var spawnCounter = 0
 
     private val isDragging: Boolean
         get() = System.currentTimeMillis() < dragUntilMs
@@ -69,7 +69,7 @@ class EditorViewModel @Inject constructor(
         projectId = id
 
         _uiState.value = EditorUiState()
-        _frameIndexFlow.value = 0
+        spawnCounter = 0
 
         viewModelScope.launch {
             val project = projectRepository.getById(projectId)
@@ -100,28 +100,21 @@ class EditorViewModel @Inject constructor(
     private fun observeAnnotations() {
         observeAnnotationsJob?.cancel()
         observeAnnotationsJob = viewModelScope.launch {
-            _frameIndexFlow
-                .flatMapLatest { frame -> annotationDao.observeForFrame(projectId, frame) }
-                .collect { entities ->
-                    if (isDragging) return@collect
-                    val items = entities.mapNotNull { e ->
-                        AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, e.frameIndex, it) }
-                    }
-                    _uiState.update { current ->
-                        val newSelection = if (current.selectedAnnotationIndex != null && current.selectedAnnotationIndex in items.indices) {
-                            current.selectedAnnotationIndex
-                        } else {
-                            null
-                        }
-                        current.copy(annotations = items, selectedAnnotationIndex = newSelection)
-                    }
+            annotationDao.observeForProject(projectId).collect { entities ->
+                if (isDragging) return@collect
+                val items = entities.mapNotNull { e ->
+                    AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, e.frameIndex, it) }
                 }
+                _uiState.update { current ->
+                    val sel = current.selectedAnnotationIndex?.takeIf { it in items.indices }
+                    current.copy(annotations = items, selectedAnnotationIndex = sel)
+                }
+            }
         }
     }
 
     fun updatePlayerState(currentTimeMs: Long, totalDurationMs: Long, isPlaying: Boolean, frameRate: Float = 30f) {
         val frameIdx = FrameMath.frameForMs(currentTimeMs, frameRate)
-        _frameIndexFlow.value = frameIdx
         _uiState.update { current ->
             if (current.frameIndex == frameIdx && current.frameRate == frameRate && current.isPlaying == isPlaying) {
                 current
@@ -150,28 +143,38 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun spawnOffset(): Offset {
-        val n = _uiState.value.annotations.size % 8
-        return Offset(n * 0.02f, n * 0.03f)
+        val i = spawnCounter++
+        // Golden-angle spiral: never repeats, stays near centre, spreads outward.
+        val angle = i * 2.39996323f                       // ~137.5° in radians
+        val radius = 0.02f + 0.012f * sqrt(i.toFloat())
+        return Offset(
+            (radius * cos(angle)).coerceIn(-0.25f, 0.25f),
+            (radius * sin(angle)).coerceIn(-0.25f, 0.25f),
+        )
     }
+
+    private fun Offset.clampNorm(): Offset = Offset(x.coerceIn(0.05f, 0.95f), y.coerceIn(0.05f, 0.95f))
 
     fun addLine() {
         val o = spawnOffset()
-        saveNewShape(AnnotationShape.Line(Offset(0.3f, 0.5f) + o, Offset(0.7f, 0.5f) + o), "line")
+        val start = (Offset(0.3f, 0.5f) + o).clampNorm()
+        val end = (Offset(0.7f, 0.5f) + o).clampNorm()
+        saveNewShape(AnnotationShape.Line(start, end), "line")
     }
 
     fun addAngle() {
         val o = spawnOffset()
-        val angle = AnnotationShape.Angle(
-            start = Offset(0.3f, 0.4f) + o,
-            center = Offset(0.5f, 0.5f) + o,
-            end = Offset(0.7f, 0.4f) + o,
-        )
+        val start = (Offset(0.3f, 0.4f) + o).clampNorm()
+        val center = (Offset(0.5f, 0.5f) + o).clampNorm()
+        val end = (Offset(0.7f, 0.4f) + o).clampNorm()
+        val angle = AnnotationShape.Angle(start, center, end)
         saveNewShape(angle, "angle")
     }
 
     fun addCircle() {
         val o = spawnOffset()
-        val circle = AnnotationShape.Circle(Offset(0.5f, 0.5f) + o, 0.15f)
+        val center = (Offset(0.5f, 0.5f) + o).clampNorm()
+        val circle = AnnotationShape.Circle(center, 0.15f)
         saveNewShape(circle, "circle")
     }
 
@@ -280,9 +283,8 @@ class EditorViewModel @Inject constructor(
     }
 
     fun clearAllAnnotations() {
-        val frame = _uiState.value.frameIndex
         viewModelScope.launch {
-            annotationDao.deleteAllForFrame(projectId, frame)
+            annotationDao.deleteAllForProject(projectId)
             _uiState.update { it.copy(selectedAnnotationIndex = null) }
         }
     }

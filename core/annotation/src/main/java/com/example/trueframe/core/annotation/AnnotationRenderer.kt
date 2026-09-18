@@ -53,6 +53,7 @@ fun AnnotationOverlay(
         if (w <= 0f || h <= 0f) return@Canvas
 
         val toSource = if (sourceWidthPx > 0f) sourceWidthPx / w else 0f
+        val totalCount = shapes.size
 
         shapes.forEachIndexed { index, shape ->
             val isSelected = (index == selectedIndex)
@@ -68,6 +69,8 @@ fun AnnotationOverlay(
                     color = if (isSelected) selectedColor else lineColor,
                     strokeWidth = stroke,
                     showHandles = showHandles,
+                    isSelected = isSelected,
+                    totalShapesCount = totalCount,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                     toSource = toSource,
@@ -78,6 +81,8 @@ fun AnnotationOverlay(
                     color = if (isSelected) selectedColor else angleColor,
                     strokeWidth = stroke,
                     showHandles = showHandles,
+                    isSelected = isSelected,
+                    totalShapesCount = totalCount,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                 )
@@ -86,6 +91,8 @@ fun AnnotationOverlay(
                     color = if (isSelected) selectedColor else circleColor,
                     strokeWidth = stroke,
                     showHandles = showHandles,
+                    isSelected = isSelected,
+                    totalShapesCount = totalCount,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                     toSource = toSource,
@@ -152,6 +159,8 @@ private fun DrawScope.drawAnnotationLine(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
+    isSelected: Boolean,
+    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
     toSource: Float,
@@ -169,16 +178,18 @@ private fun DrawScope.drawAnnotationLine(
         drawHandle(line.end, color, handleRadius)
     }
 
-    // Distance text readout in source video pixels (or % if source width is unknown)
-    val len = hypot((line.end.x - line.start.x).toDouble(), (line.end.y - line.start.y).toDouble()).toFloat()
-    val text = if (toSource > 0f) {
-        String.format(Locale.US, "%.0f px", len * toSource)
-    } else {
-        String.format(Locale.US, "%.1f%%", (len / viewWidth) * 100f)
+    if (showHandles && (isSelected || totalShapesCount <= 3)) {
+        // Distance text readout in source video pixels (or % if source width is unknown)
+        val len = hypot((line.end.x - line.start.x).toDouble(), (line.end.y - line.start.y).toDouble()).toFloat()
+        val text = if (toSource > 0f) {
+            String.format(Locale.US, "%.0f px", len * toSource)
+        } else {
+            String.format(Locale.US, "%.1f%%", (len / viewWidth) * 100f)
+        }
+        textPaint.color = color.toArgb()
+        val mid = Offset((line.start.x + line.end.x) / 2f, (line.start.y + line.end.y) / 2f)
+        drawContext.canvas.nativeCanvas.drawText(text, mid.x + 12f, mid.y - 12f, textPaint)
     }
-    textPaint.color = color.toArgb()
-    val mid = Offset((line.start.x + line.end.x) / 2f, (line.start.y + line.end.y) / 2f)
-    drawContext.canvas.nativeCanvas.drawText(text, mid.x + 12f, mid.y - 12f, textPaint)
 }
 
 private fun DrawScope.drawAnnotationAngle(
@@ -186,6 +197,8 @@ private fun DrawScope.drawAnnotationAngle(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
+    isSelected: Boolean,
+    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
 ) {
@@ -199,13 +212,14 @@ private fun DrawScope.drawAnnotationAngle(
         drawHandle(angle.end, color, handleRadius)
     }
 
-    // Render angle text in degrees
-    val degrees = angle.degrees()
-    val text = String.format(Locale.US, "%.1f°", degrees)
-    textPaint.color = color.toArgb()
-    
-    val textOffset = angle.center + Offset(24f, -24f)
-    drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
+    if (showHandles && (isSelected || totalShapesCount <= 3)) {
+        // Render angle text in degrees
+        val degrees = angle.degrees()
+        val text = String.format(Locale.US, "%.1f°", degrees)
+        textPaint.color = color.toArgb()
+        val textOffset = angle.center + Offset(24f, -24f)
+        drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
+    }
 }
 
 private fun DrawScope.drawAnnotationCircle(
@@ -213,6 +227,8 @@ private fun DrawScope.drawAnnotationCircle(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
+    isSelected: Boolean,
+    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
     toSource: Float,
@@ -229,13 +245,15 @@ private fun DrawScope.drawAnnotationCircle(
         drawHandle(circle.center + Offset(circle.radius, 0f), color, handleRadius)
     }
 
-    // Radius text readout in source video pixels (or % if source width is unknown)
-    val text = if (toSource > 0f) {
-        String.format(Locale.US, "r: %.0f px", circle.radius * toSource)
-    } else {
-        String.format(Locale.US, "r: %.1f%%", (circle.radius / viewWidth) * 100f)
+    if (showHandles && (isSelected || totalShapesCount <= 3)) {
+        // Radius text readout in source video pixels (or % if source width is unknown)
+        val text = if (toSource > 0f) {
+            String.format(Locale.US, "r: %.0f px", circle.radius * toSource)
+        } else {
+            String.format(Locale.US, "r: %.1f%%", (circle.radius / viewWidth) * 100f)
+        }
+        textPaint.color = color.toArgb()
+        val textOffset = circle.center + Offset(circle.radius + 12f, -12f)
+        drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
     }
-    textPaint.color = color.toArgb()
-    val textOffset = circle.center + Offset(circle.radius + 12f, -12f)
-    drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
 }

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -105,9 +107,11 @@ fun EditorScreen(
     val currentAnnotations by rememberUpdatedState(uiState.annotations)
 
     var currentPositionMs by remember { mutableLongStateOf(0L) }
+    var scrubPositionMs by remember { mutableLongStateOf(0L) }
     var totalDurationMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var isScrubbing by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     var videoW by remember { mutableIntStateOf(0) }
     var videoH by remember { mutableIntStateOf(0) }
@@ -163,7 +167,7 @@ fun EditorScreen(
                 new: Player.PositionInfo,
                 reason: Int,
             ) {
-                currentPositionMs = new.positionMs
+                if (!isScrubbing) currentPositionMs = new.positionMs
             }
         }
         player.addListener(listener)
@@ -187,7 +191,7 @@ fun EditorScreen(
         val player = exoPlayer ?: return@LaunchedEffect
         if (!isPlaying) return@LaunchedEffect
         while (isActive) {
-            currentPositionMs = player.currentPosition
+            if (!isScrubbing) currentPositionMs = player.currentPosition
             delay(16L)
         }
     }
@@ -204,8 +208,14 @@ fun EditorScreen(
                     Column {
                         Text(uiState.projectName.ifEmpty { "Project $projectId" }, style = MaterialTheme.typography.titleMedium)
                         val seconds = currentPositionMs / 1000f
+                        val selectedItem = uiState.selectedAnnotationIndex?.let { uiState.annotations.getOrNull(it) }
+                        val subtitleText = if (selectedItem != null) {
+                            String.format(Locale.US, "Frame %d (%.2fs) · selected: drawn on frame %d", currentFrameIdx, seconds, selectedItem.frameIndex)
+                        } else {
+                            String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds)
+                        }
                         Text(
-                            text = String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds),
+                            text = subtitleText,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -251,7 +261,8 @@ fun EditorScreen(
 
                         if (totalDurationMs > 0) {
                             Slider(
-                                value = currentPositionMs.toFloat().coerceIn(0f, totalDurationMs.toFloat()),
+                                value = (if (isScrubbing) scrubPositionMs else currentPositionMs)
+                                    .toFloat().coerceIn(0f, totalDurationMs.toFloat()),
                                 onValueChange = { newMs ->
                                     val player = exoPlayer ?: return@Slider
                                     if (!isScrubbing) {
@@ -259,13 +270,18 @@ fun EditorScreen(
                                         player.pause()
                                         player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
                                     }
-                                    player.seekTo(newMs.toLong())
-                                    currentPositionMs = newMs.toLong()
+                                    scrubPositionMs = newMs.toLong()
+                                    player.seekTo(scrubPositionMs)
                                 },
                                 onValueChangeFinished = {
                                     val player = exoPlayer ?: return@Slider
                                     player.setSeekParameters(SeekParameters.EXACT)
-                                    player.seekTo(currentPositionMs)
+                                    // Land dead-centre on a frame rather than between two.
+                                    val snapped = FrameMath.msForFrame(
+                                        FrameMath.frameForMs(scrubPositionMs, frameRate), frameRate
+                                    ).coerceIn(0L, totalDurationMs)
+                                    player.seekTo(snapped)
+                                    currentPositionMs = snapped
                                     isScrubbing = false
                                 },
                                 valueRange = 0f..totalDurationMs.toFloat().coerceAtLeast(1f),
@@ -334,8 +350,25 @@ fun EditorScreen(
                             }
                         }
 
+                        if (showClearConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { showClearConfirm = false },
+                                title = { Text("Clear all annotations?") },
+                                text = { Text("This deletes all ${uiState.annotations.size} annotations in this project. This can't be undone.") },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        viewModel.clearAllAnnotations()
+                                        showClearConfirm = false
+                                    }) { Text("Clear all") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
+                                },
+                            )
+                        }
+
                         if (uiState.annotations.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.clearAllAnnotations() }) {
+                            IconButton(onClick = { showClearConfirm = true }) {
                                 Icon(Icons.Default.DeleteSweep, contentDescription = "Clear All")
                             }
                         }
