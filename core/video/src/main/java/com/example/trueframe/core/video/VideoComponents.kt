@@ -2,6 +2,7 @@ package com.example.trueframe.core.video
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.LruCache
@@ -133,14 +134,27 @@ class ProxyReader {
             try {
                 val r = getRetriever()
                 val option = if (fastSeek) MediaMetadataRetriever.OPTION_CLOSEST_SYNC else MediaMetadataRetriever.OPTION_CLOSEST
-                val bitmap = synchronized(this@Session) {
+                val rawBitmap = synchronized(this@Session) {
                     r.getScaledFrameAtTime(quantizedUs.coerceAtLeast(0L), option, 720, 1280)
                         ?: r.getFrameAtTime(quantizedUs.coerceAtLeast(0L), option)
                 }
-                if (bitmap != null) {
-                    cache.put(quantizedUs, bitmap)
+
+                if (rawBitmap != null) {
+                    val rotationStr = synchronized(this@Session) {
+                        r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    }
+                    val rotationDeg = rotationStr?.toIntOrNull() ?: 0
+                    val orientedBitmap = if (rotationDeg != 0) {
+                        val matrix = Matrix().apply { postRotate(rotationDeg.toFloat()) }
+                        Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                    } else {
+                        rawBitmap
+                    }
+                    cache.put(quantizedUs, orientedBitmap)
+                    orientedBitmap
+                } else {
+                    null
                 }
-                bitmap
             } catch (e: Exception) {
                 null
             }

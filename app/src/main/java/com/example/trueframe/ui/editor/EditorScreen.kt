@@ -360,14 +360,14 @@ fun EditorScreen(
                     if (exoPlayer != null) {
                         AndroidView(
                             factory = { ctx ->
-                                TextureView(ctx).apply {
-                                    exoPlayer.setVideoTextureView(this)
-                                    isClickable = false
-                                    isFocusable = false
+                                PlayerView(ctx).apply {
+                                    player = exoPlayer
+                                    useController = false
+                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 }
                             },
                             update = { view ->
-                                exoPlayer.setVideoTextureView(view)
+                                view.player = exoPlayer
                                 view.rotation = uiState.rotationDegrees.toFloat()
                             },
                             modifier = Modifier
