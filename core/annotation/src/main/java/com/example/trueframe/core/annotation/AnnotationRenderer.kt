@@ -29,6 +29,7 @@ fun AnnotationOverlay(
     showHandles: Boolean = true,
     rotationDegrees: Int = 0,
     frameAspect: Float = 1f,
+    sourceWidthPx: Float = 0f,
     lineColor: Color = Color(0xFFFF6D00),
     angleColor: Color = Color(0xFF00E676),
     circleColor: Color = Color(0xFF448AFF),
@@ -37,7 +38,7 @@ fun AnnotationOverlay(
     val density = LocalDensity.current
     val strokePx = with(density) { 3.dp.toPx() }
     val handlePx = with(density) { 18.dp.toPx() }
-    val textPaint = remember {
+    val textPaint = remember(density) {
         Paint().apply {
             textSize = with(density) { 16.dp.toPx() }
             isAntiAlias = true
@@ -50,6 +51,8 @@ fun AnnotationOverlay(
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas
+
+        val toSource = if (sourceWidthPx > 0f) sourceWidthPx / w else 0f
 
         shapes.forEachIndexed { index, shape ->
             val isSelected = (index == selectedIndex)
@@ -67,6 +70,8 @@ fun AnnotationOverlay(
                     showHandles = showHandles,
                     handleRadius = handlePx,
                     textPaint = textPaint,
+                    toSource = toSource,
+                    viewWidth = w,
                 )
                 is AnnotationShape.Angle -> drawAnnotationAngle(
                     angle = pixelShape,
@@ -83,6 +88,8 @@ fun AnnotationOverlay(
                     showHandles = showHandles,
                     handleRadius = handlePx,
                     textPaint = textPaint,
+                    toSource = toSource,
+                    viewWidth = w,
                 )
             }
         }
@@ -147,6 +154,8 @@ private fun DrawScope.drawAnnotationLine(
     showHandles: Boolean,
     handleRadius: Float,
     textPaint: Paint,
+    toSource: Float,
+    viewWidth: Float,
 ) {
     drawLine(
         color = color,
@@ -160,9 +169,13 @@ private fun DrawScope.drawAnnotationLine(
         drawHandle(line.end, color, handleRadius)
     }
 
-    // Distance text readout
+    // Distance text readout in source video pixels (or % if source width is unknown)
     val len = hypot((line.end.x - line.start.x).toDouble(), (line.end.y - line.start.y).toDouble()).toFloat()
-    val text = String.format(Locale.US, "%.1f px", len)
+    val text = if (toSource > 0f) {
+        String.format(Locale.US, "%.0f px", len * toSource)
+    } else {
+        String.format(Locale.US, "%.1f%%", (len / viewWidth) * 100f)
+    }
     textPaint.color = color.toArgb()
     val mid = Offset((line.start.x + line.end.x) / 2f, (line.start.y + line.end.y) / 2f)
     drawContext.canvas.nativeCanvas.drawText(text, mid.x + 12f, mid.y - 12f, textPaint)
@@ -202,6 +215,8 @@ private fun DrawScope.drawAnnotationCircle(
     showHandles: Boolean,
     handleRadius: Float,
     textPaint: Paint,
+    toSource: Float,
+    viewWidth: Float,
 ) {
     drawCircle(
         color = color,
@@ -214,8 +229,12 @@ private fun DrawScope.drawAnnotationCircle(
         drawHandle(circle.center + Offset(circle.radius, 0f), color, handleRadius)
     }
 
-    // Radius text readout
-    val text = String.format(Locale.US, "r: %.1f px", circle.radius)
+    // Radius text readout in source video pixels (or % if source width is unknown)
+    val text = if (toSource > 0f) {
+        String.format(Locale.US, "r: %.0f px", circle.radius * toSource)
+    } else {
+        String.format(Locale.US, "r: %.1f%%", (circle.radius / viewWidth) * 100f)
+    }
     textPaint.color = color.toArgb()
     val textOffset = circle.center + Offset(circle.radius + 12f, -12f)
     drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)

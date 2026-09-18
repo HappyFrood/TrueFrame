@@ -4,25 +4,29 @@ import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.trueframe.core.annotation.AnnotationShape
+import com.example.trueframe.core.video.FrameMath
 import com.example.trueframe.data.AnnotationDao
 import com.example.trueframe.data.AnnotationEntity
 import com.example.trueframe.data.AnnotationJson
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 import kotlin.math.hypot
 
-data class AnnotationItem(val id: Long, val shape: AnnotationShape)
+data class AnnotationItem(val id: Long, val frameIndex: Int, val shape: AnnotationShape)
 
 data class EditorUiState(
     val videoUri: String? = null,
+    val projectName: String = "",
     val frameIndex: Int = 0,
     val frameRate: Float = 30f,
     val currentTimeMs: Long = 0L,
@@ -33,9 +37,10 @@ data class EditorUiState(
     val selectedAnnotationIndex: Int? = null,
     val error: String? = null,
 ) {
-    val frameIntervalMs: Long get() = (1000f / frameRate.coerceAtLeast(1f)).toLong().coerceAtLeast(1L)
+    val frameIntervalMs: Float get() = FrameMath.intervalMs(frameRate)
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
@@ -50,15 +55,21 @@ class EditorViewModel @Inject constructor(
 
     private val _frameIndexFlow = MutableStateFlow(0)
 
-    @Volatile private var isDragging = false
+    @Volatile private var dragUntilMs = 0L
+    private val DRAG_LATCH_MS = 2_000L
 
-    fun onDragStarted() { isDragging = true }
+    private val isDragging: Boolean
+        get() = System.currentTimeMillis() < dragUntilMs
+
+    fun onDragStarted() { dragUntilMs = Long.MAX_VALUE }
+    fun onDragCancelled() { dragUntilMs = 0L }
 
     fun initialize(id: Long) {
         if (projectId == id) return
         projectId = id
 
         _uiState.value = EditorUiState()
+        _frameIndexFlow.value = 0
 
         viewModelScope.launch {
             val project = projectRepository.getById(projectId)
@@ -71,36 +82,56 @@ class EditorViewModel @Inject constructor(
                 } else null
 
                 val uri = validProxy ?: project.videoUri
-                _uiState.update { it.copy(videoUri = uri, rotationDegrees = project.rotationDegrees) }
+                _uiState.update {
+                    it.copy(
+                        videoUri = uri,
+                        projectName = project.name,
+                        rotationDegrees = project.rotationDegrees,
+                    )
+                }
             } else {
                 _uiState.update { it.copy(error = "Project not found") }
             }
         }
 
+        observeAnnotations()
+    }
+
+    private fun observeAnnotations() {
         observeAnnotationsJob?.cancel()
         observeAnnotationsJob = viewModelScope.launch {
-            annotationDao.observeForProject(projectId).collect { entities ->
-                if (isDragging) return@collect          // never clobber a live drag
-                val items = entities.mapNotNull { e ->
-                    AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, it) }
+            _frameIndexFlow
+                .flatMapLatest { frame -> annotationDao.observeForFrame(projectId, frame) }
+                .collect { entities ->
+                    if (isDragging) return@collect
+                    val items = entities.mapNotNull { e ->
+                        AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, e.frameIndex, it) }
+                    }
+                    _uiState.update { current ->
+                        val newSelection = if (current.selectedAnnotationIndex != null && current.selectedAnnotationIndex in items.indices) {
+                            current.selectedAnnotationIndex
+                        } else {
+                            null
+                        }
+                        current.copy(annotations = items, selectedAnnotationIndex = newSelection)
+                    }
                 }
-                _uiState.update { it.copy(annotations = items) }
-            }
         }
     }
 
     fun updatePlayerState(currentTimeMs: Long, totalDurationMs: Long, isPlaying: Boolean, frameRate: Float = 30f) {
-        val interval = (1000f / frameRate.coerceAtLeast(1f)).toLong().coerceAtLeast(1L)
-        val frameIdx = (currentTimeMs / interval).toInt()
+        val frameIdx = FrameMath.frameForMs(currentTimeMs, frameRate)
         _frameIndexFlow.value = frameIdx
-        _uiState.update {
-            it.copy(
-                currentTimeMs = currentTimeMs,
-                totalDurationMs = totalDurationMs,
-                isPlaying = isPlaying,
-                frameRate = frameRate,
-                frameIndex = frameIdx,
-            )
+        _uiState.update { current ->
+            if (current.frameIndex == frameIdx && current.frameRate == frameRate && current.isPlaying == isPlaying) {
+                current
+            } else {
+                current.copy(
+                    isPlaying = isPlaying,
+                    frameRate = frameRate,
+                    frameIndex = frameIdx,
+                )
+            }
         }
     }
 
@@ -158,6 +189,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun offsetShape(shapeIndex: Int, delta: Offset) {
+        dragUntilMs = System.currentTimeMillis() + DRAG_LATCH_MS
         val items = _uiState.value.annotations.toMutableList()
         if (shapeIndex !in items.indices) return
 
@@ -176,6 +208,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun updateShapeHandle(shapeIndex: Int, handleIndex: Int, newOffset: Offset, aspectCorrection: Float = 1.0f) {
+        dragUntilMs = System.currentTimeMillis() + DRAG_LATCH_MS
         val items = _uiState.value.annotations.toMutableList()
         if (shapeIndex !in items.indices) return
 
@@ -214,21 +247,20 @@ class EditorViewModel @Inject constructor(
     }
 
     fun persistAnnotationsOnDragEnd(shapeIndex: Int?) {
+        dragUntilMs = 0L
         val item = shapeIndex?.let { _uiState.value.annotations.getOrNull(it) }
-        val frame = _uiState.value.frameIndex
         viewModelScope.launch {
             if (item != null) {
                 annotationDao.update(
                     AnnotationEntity(
                         id = item.id,
                         projectId = projectId,
-                        frameIndex = frame,
+                        frameIndex = item.frameIndex,
                         shapeType = item.shape.typeName(),
                         serializedData = AnnotationJson.serialize(item.shape),
                     )
                 )
             }
-            isDragging = false
         }
     }
 
@@ -248,8 +280,9 @@ class EditorViewModel @Inject constructor(
     }
 
     fun clearAllAnnotations() {
+        val frame = _uiState.value.frameIndex
         viewModelScope.launch {
-            annotationDao.deleteAllForProject(projectId)
+            annotationDao.deleteAllForFrame(projectId, frame)
             _uiState.update { it.copy(selectedAnnotationIndex = null) }
         }
     }

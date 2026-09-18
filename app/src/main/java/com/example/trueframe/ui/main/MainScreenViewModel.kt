@@ -59,10 +59,6 @@ class MainScreenViewModel @Inject constructor(
             transcodeBus.events.collect { event ->
                 when (event) {
                     is TranscodeEvent.Completed -> {
-                        val project = projectRepository.getById(event.projectId)
-                        if (project != null) {
-                            projectRepository.update(project.copy(proxyUri = event.proxyUri))
-                        }
                         _activeTranscodeProjectId.value = null
                     }
                     is TranscodeEvent.Failed -> {

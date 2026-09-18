@@ -5,6 +5,7 @@ package com.example.trueframe.ui.editor
 
 import android.net.Uri
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -78,6 +79,7 @@ import com.example.trueframe.core.annotation.HitTesting
 import com.example.trueframe.core.annotation.rotateNorm
 import com.example.trueframe.core.annotation.rotateVectorNorm
 import com.example.trueframe.core.annotation.toPixelSpace
+import com.example.trueframe.core.video.FrameMath
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.OptIn
@@ -112,8 +114,7 @@ fun EditorScreen(
     var pixelRatio by remember { mutableFloatStateOf(1f) }
     var frameRate by remember { mutableFloatStateOf(30f) }
 
-    val frameIntervalMs = (1000f / frameRate.coerceAtLeast(1f))
-    val currentFrameIdx = (currentPositionMs / frameIntervalMs).toInt()
+    val currentFrameIdx = FrameMath.frameForMs(currentPositionMs, frameRate)
 
     // Hardware ExoPlayer instance for 100% native video playback & instant seeking
     val exoPlayer = remember(uiState.videoUri) {
@@ -128,8 +129,8 @@ fun EditorScreen(
     fun seekToFrame(delta: Int) {
         val player = exoPlayer ?: return
         player.pause()
-        val target = ((currentFrameIdx + delta).coerceAtLeast(0) * frameIntervalMs)
-            .toLong().coerceIn(0L, totalDurationMs)
+        player.setSeekParameters(SeekParameters.EXACT)
+        val target = FrameMath.calculateTargetTimeMs(currentFrameIdx, delta, frameRate, totalDurationMs)
         player.seekTo(target)
         currentPositionMs = target
     }
@@ -147,17 +148,14 @@ fun EditorScreen(
                     videoH = size.height
                 }
                 pixelRatio = if (size.pixelWidthHeightRatio > 0f) size.pixelWidthHeightRatio else 1f
-                viewModel.updatePlayerState(player.currentPosition, totalDurationMs, isPlaying, frameRate)
             }
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
-                viewModel.updatePlayerState(player.currentPosition, totalDurationMs, playing, frameRate)
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) {
                     totalDurationMs = player.duration.coerceAtLeast(1L)
                     player.videoFormat?.frameRate?.let { if (it > 0f) frameRate = it }
-                    viewModel.updatePlayerState(player.currentPosition, totalDurationMs, isPlaying, frameRate)
                 }
             }
             override fun onPositionDiscontinuity(
@@ -166,7 +164,6 @@ fun EditorScreen(
                 reason: Int,
             ) {
                 currentPositionMs = new.positionMs
-                viewModel.updatePlayerState(new.positionMs, totalDurationMs, isPlaying, frameRate)
             }
         }
         player.addListener(listener)
@@ -205,7 +202,7 @@ fun EditorScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Project $projectId", style = MaterialTheme.typography.titleMedium)
+                        Text(uiState.projectName.ifEmpty { "Project $projectId" }, style = MaterialTheme.typography.titleMedium)
                         val seconds = currentPositionMs / 1000f
                         Text(
                             text = String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds),
@@ -387,6 +384,14 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .size(fittedWidthDp, fittedHeightDp)
+                        .pointerInput(vw, vh, uiState.rotationDegrees, rawWidth, rawHeight, shapeTouchPx) {
+                            detectTapGestures { tap ->
+                                val pixelShapes = currentAnnotations.map {
+                                    it.shape.rotateNorm(uiState.rotationDegrees, rawWidth / rawHeight).toPixelSpace(vw, vh)
+                                }
+                                viewModel.selectAnnotation(findHitShape(pixelShapes, tap, shapeTouchPx))
+                            }
+                        }
                         .pointerInput(vw, vh, uiState.rotationDegrees, rawWidth, rawHeight, handleTouchPx, shapeTouchPx) {
                             detectDragGestures(
                                 onDragStart = { startOffset ->
@@ -425,6 +430,11 @@ fun EditorScreen(
                                     activeDragTarget = null
                                     activeShapeDragIndex = null
                                     viewModel.persistAnnotationsOnDragEnd(draggedIndex)
+                                },
+                                onDragCancel = {
+                                    activeDragTarget = null
+                                    activeShapeDragIndex = null
+                                    viewModel.onDragCancelled()
                                 }
                             )
                         },
@@ -470,6 +480,7 @@ fun EditorScreen(
                         showHandles = (!isPlaying),
                         rotationDegrees = uiState.rotationDegrees,
                         frameAspect = rawWidth / rawHeight,
+                        sourceWidthPx = rawWidth,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
