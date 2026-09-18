@@ -1,6 +1,7 @@
 package com.example.trueframe.core.annotation
 
 import androidx.compose.ui.geometry.Offset
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 
@@ -51,31 +52,26 @@ sealed interface AnnotationShape {
  * Spec: "Added minimum touch targets for annotations."
  */
 object HitTesting {
-    /** Default minimum touch-target half-size in px (48dp * ~2.75 density ≈ 132, use 24dp worth) */
-    const val MIN_TOUCH_TARGET_PX = 48f
+    /** Minimum touch-target radius in **dp**. Convert at the call site via LocalDensity. */
+    const val MIN_TOUCH_TARGET_DP = 24f   // 24dp radius == 48dp target
 
-    fun hitTest(
-        shape: AnnotationShape,
-        point: Offset,
-        touchSlop: Float = MIN_TOUCH_TARGET_PX,
-    ): Boolean = when (shape) {
-        is AnnotationShape.Line -> distanceToSegment(point, shape.start, shape.end) <= touchSlop
-        is AnnotationShape.Angle -> {
-            distanceToSegment(point, shape.center, shape.start) <= touchSlop ||
-                distanceToSegment(point, shape.center, shape.end) <= touchSlop
-        }
-        is AnnotationShape.Circle -> {
-            val distToEdge = kotlin.math.abs(
-                hypot(
-                    (point.x - shape.center.x).toDouble(),
-                    (point.y - shape.center.y).toDouble(),
-                ).toFloat() - shape.radius
-            )
-            distToEdge <= touchSlop
-        }
+    fun distanceTo(shape: AnnotationShape, point: Offset): Float = when (shape) {
+        is AnnotationShape.Line -> distanceToSegment(point, shape.start, shape.end)
+        is AnnotationShape.Angle -> minOf(
+            distanceToSegment(point, shape.center, shape.start),
+            distanceToSegment(point, shape.center, shape.end),
+        )
+        is AnnotationShape.Circle -> abs(
+            hypot(
+                (point.x - shape.center.x).toDouble(),
+                (point.y - shape.center.y).toDouble(),
+            ).toFloat() - shape.radius
+        )
     }
 
-    /** Point-to-line-segment distance. */
+    fun hitTest(shape: AnnotationShape, point: Offset, touchSlop: Float): Boolean =
+        distanceTo(shape, point) <= touchSlop
+
     private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
         val ab = b - a
         val dot = ab.x * ab.x + ab.y * ab.y

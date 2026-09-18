@@ -160,7 +160,11 @@ class ProxyTranscoder {
  */
 class ProxyReader {
 
-    class Session(private val proxyPath: String, private val context: Context? = null) {
+    class Session(
+        private val proxyPath: String,
+        private val context: Context? = null,
+        private val frameIntervalUs: Long = 33_333L,
+    ) {
         private var retriever: MediaMetadataRetriever? = null
         private val cache = LruCache<Long, Bitmap>(60)
 
@@ -179,7 +183,7 @@ class ProxyReader {
         }
 
         suspend fun readFrameAtTimeUs(timeUs: Long, fastSeek: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
-            val quantizedUs = (timeUs / 33333L) * 33333L
+            val quantizedUs = (timeUs / frameIntervalUs) * frameIntervalUs
             cache.get(quantizedUs)?.let { return@withContext it }
 
             try {
@@ -250,8 +254,8 @@ class ProxyReader {
         }
     }
 
-    suspend fun readFrame(proxyPath: String, frameIndex: Int, context: Context? = null): Bitmap? {
-        return readFrameAtTimeUs(proxyPath, frameIndex * 33333L, context)
+    suspend fun readFrame(proxyPath: String, frameIndex: Int, context: Context? = null, frameIntervalUs: Long = 33_333L): Bitmap? {
+        return readFrameAtTimeUs(proxyPath, frameIndex * frameIntervalUs, context)
     }
 
     suspend fun readFrameAtTimeUs(proxyPath: String, timeUs: Long, context: Context? = null): Bitmap? = withContext(Dispatchers.IO) {

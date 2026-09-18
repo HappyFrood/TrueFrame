@@ -44,6 +44,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -61,6 +62,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -69,7 +72,7 @@ import com.example.trueframe.core.annotation.AnnotationOverlay
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.HitTesting
 import com.example.trueframe.core.annotation.rotateNorm
-import com.example.trueframe.core.annotation.toPixelSpace
+import com.example.trueframe.core.annotation.rotateVectorNorm
 import com.example.trueframe.core.annotation.toPixelSpace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -97,6 +100,14 @@ fun EditorScreen(
     var totalDurationMs by remember { mutableLongStateOf(1000L) }
     var isPlaying by remember { mutableStateOf(false) }
 
+    var videoW by remember { mutableIntStateOf(0) }
+    var videoH by remember { mutableIntStateOf(0) }
+    var pixelRatio by remember { mutableFloatStateOf(1f) }
+    var frameRate by remember { mutableFloatStateOf(30f) }
+
+    val frameIntervalMs = (1000f / frameRate.coerceAtLeast(1f))
+    val currentFrameIdx = (currentPositionMs / frameIntervalMs).toInt()
+
     // Hardware ExoPlayer instance for 100% native video playback & instant seeking
     val exoPlayer = remember(uiState.videoUri) {
         if (uiState.videoUri != null) {
@@ -107,23 +118,63 @@ fun EditorScreen(
         } else null
     }
 
+    fun seekToFrame(delta: Int) {
+        val player = exoPlayer ?: return
+        player.pause()
+        val target = ((currentFrameIdx + delta).coerceAtLeast(0) * frameIntervalMs)
+            .toLong().coerceIn(0L, totalDurationMs)
+        player.seekTo(target)
+        currentPositionMs = target
+    }
+
     DisposableEffect(exoPlayer) {
+        val player = exoPlayer ?: return@DisposableEffect onDispose { }
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(size: VideoSize) {
+                videoW = size.width
+                videoH = size.height
+                pixelRatio = if (size.pixelWidthHeightRatio > 0f) size.pixelWidthHeightRatio else 1f
+                viewModel.updatePlayerState(player.currentPosition, totalDurationMs, isPlaying, frameRate)
+            }
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                viewModel.updatePlayerState(player.currentPosition, totalDurationMs, playing, frameRate)
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) {
+                    totalDurationMs = player.duration.coerceAtLeast(1L)
+                    player.videoFormat?.frameRate?.let { if (it > 0f) frameRate = it }
+                    viewModel.updatePlayerState(player.currentPosition, totalDurationMs, isPlaying, frameRate)
+                }
+            }
+            override fun onPositionDiscontinuity(
+                old: Player.PositionInfo,
+                new: Player.PositionInfo,
+                reason: Int,
+            ) {
+                currentPositionMs = new.positionMs
+                viewModel.updatePlayerState(new.positionMs, totalDurationMs, isPlaying, frameRate)
+            }
+        }
+        player.addListener(listener)
         onDispose {
-            exoPlayer?.release()
+            player.removeListener(listener)
+            player.release()
         }
     }
 
-    // Continuously sync player position and state
-    LaunchedEffect(exoPlayer) {
+    // Poll ONLY while playing — required by the "no permanent polling loops" rule.
+    LaunchedEffect(exoPlayer, isPlaying) {
         val player = exoPlayer ?: return@LaunchedEffect
+        if (!isPlaying) return@LaunchedEffect
         while (isActive) {
-            val pos = player.currentPosition
-            val dur = player.duration.coerceAtLeast(1000L)
-            currentPositionMs = pos
-            totalDurationMs = dur
-            isPlaying = player.isPlaying
-            delay(33L)
+            currentPositionMs = player.currentPosition
+            delay(16L)
         }
+    }
+
+    LaunchedEffect(currentPositionMs, totalDurationMs, isPlaying, frameRate) {
+        viewModel.updatePlayerState(currentPositionMs, totalDurationMs, isPlaying, frameRate)
     }
 
     Scaffold(
@@ -134,7 +185,6 @@ fun EditorScreen(
                     Column {
                         Text("Project $projectId", style = MaterialTheme.typography.titleMedium)
                         val seconds = currentPositionMs / 1000f
-                        val currentFrameIdx = (currentPositionMs / 33L).toInt()
                         Text(
                             text = String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds),
                             style = MaterialTheme.typography.bodySmall,
@@ -169,7 +219,6 @@ fun EditorScreen(
                         ) {
                             val currentSec = currentPositionMs / 1000f
                             val totalSec = totalDurationMs / 1000f
-                            val currentFrameIdx = (currentPositionMs / 33L).toInt()
 
                             Text(
                                 text = String.format(Locale.US, "%.1fs / %.1fs", currentSec, totalSec),
@@ -200,20 +249,10 @@ fun EditorScreen(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(onClick = {
-                                exoPlayer?.pause()
-                                val target = (currentPositionMs - 330L).coerceAtLeast(0L)
-                                exoPlayer?.seekTo(target)
-                                currentPositionMs = target
-                            }) {
+                            IconButton(onClick = { seekToFrame(-10) }) {
                                 Icon(Icons.Default.FastRewind, contentDescription = "-10 Frames")
                             }
-                            IconButton(onClick = {
-                                exoPlayer?.pause()
-                                val target = (currentPositionMs - 33L).coerceAtLeast(0L)
-                                exoPlayer?.seekTo(target)
-                                currentPositionMs = target
-                            }) {
+                            IconButton(onClick = { seekToFrame(-1) }) {
                                 Icon(Icons.Default.ChevronLeft, contentDescription = "-1 Frame")
                             }
                             IconButton(
@@ -228,20 +267,10 @@ fun EditorScreen(
                                     contentDescription = "Play/Pause"
                                 )
                             }
-                            IconButton(onClick = {
-                                exoPlayer?.pause()
-                                val target = (currentPositionMs + 33L).coerceAtMost(totalDurationMs)
-                                exoPlayer?.seekTo(target)
-                                currentPositionMs = target
-                            }) {
+                            IconButton(onClick = { seekToFrame(+1) }) {
                                 Icon(Icons.Default.ChevronRight, contentDescription = "+1 Frame")
                             }
-                            IconButton(onClick = {
-                                exoPlayer?.pause()
-                                val target = (currentPositionMs + 330L).coerceAtMost(totalDurationMs)
-                                exoPlayer?.seekTo(target)
-                                currentPositionMs = target
-                            }) {
+                            IconButton(onClick = { seekToFrame(+10) }) {
                                 Icon(Icons.Default.FastForward, contentDescription = "+10 Frames")
                             }
                         }
@@ -295,10 +324,11 @@ fun EditorScreen(
                 val containerWidth = maxWidth
                 val containerHeight = maxHeight
                 val density = LocalDensity.current.density
+                val handleTouchPx = with(LocalDensity.current) { 24.dp.toPx() }
+                val shapeTouchPx = with(LocalDensity.current) { 16.dp.toPx() }
 
-                val videoSize = exoPlayer?.videoSize
-                val rawWidth = if (videoSize != null && videoSize.width > 0) videoSize.width.toFloat() else 1080f
-                val rawHeight = if (videoSize != null && videoSize.height > 0) videoSize.height.toFloat() else 1920f
+                val rawWidth = if (videoW > 0) videoW * pixelRatio else 1080f
+                val rawHeight = if (videoH > 0) videoH.toFloat() else 1920f
 
                 val isSideways = (uiState.rotationDegrees == 90 || uiState.rotationDegrees == 270)
 
@@ -324,19 +354,20 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .size(fittedWidthDp, fittedHeightDp)
-                        .pointerInput(Unit) {
+                        .pointerInput(vw, vh, uiState.rotationDegrees, rawWidth, rawHeight, handleTouchPx, shapeTouchPx) {
                             detectDragGestures(
                                 onDragStart = { startOffset ->
-                                    val rotatedShapes = currentAnnotations.map { it.rotateNorm(uiState.rotationDegrees, rawWidth / rawHeight) }
+                                    viewModel.onDragStarted()
+                                    val rotatedShapes = currentAnnotations.map { it.shape.rotateNorm(uiState.rotationDegrees, rawWidth / rawHeight) }
                                     val pixelShapes = rotatedShapes.map { it.toPixelSpace(vw, vh) }
-                                    val handleHit = findHitHandle(pixelShapes, startOffset, thresholdPx = 160f)
+                                    val handleHit = findHitHandle(pixelShapes, startOffset, handleTouchPx)
                                     if (handleHit != null) {
                                         activeDragTarget = handleHit
                                         activeShapeDragIndex = null
                                         viewModel.selectAnnotation(handleHit.first)
                                     } else {
                                         activeDragTarget = null
-                                        val shapeHit = findHitShape(pixelShapes, startOffset)
+                                        val shapeHit = findHitShape(pixelShapes, startOffset, shapeTouchPx)
                                         activeShapeDragIndex = shapeHit
                                         viewModel.selectAnnotation(shapeHit)
                                     }
@@ -347,7 +378,7 @@ fun EditorScreen(
                                     val normDelta = Offset(dragAmount.x / vw, dragAmount.y / vh)
 
                                     val unrotatedPos = normPos.rotateNorm(-uiState.rotationDegrees)
-                                    val unrotatedDelta = normDelta.rotateNorm(-uiState.rotationDegrees)
+                                    val unrotatedDelta = normDelta.rotateVectorNorm(-uiState.rotationDegrees)
 
                                     activeDragTarget?.let { (shapeIdx, handleIdx) ->
                                         // The aspect correction for the handle update needs to be the original aspect
@@ -357,9 +388,10 @@ fun EditorScreen(
                                     }
                                 },
                                 onDragEnd = {
+                                    val draggedIndex = activeDragTarget?.first ?: activeShapeDragIndex
                                     activeDragTarget = null
                                     activeShapeDragIndex = null
-                                    viewModel.persistAnnotationsOnDragEnd()
+                                    viewModel.persistAnnotationsOnDragEnd(draggedIndex)
                                 }
                             )
                         },
@@ -378,8 +410,12 @@ fun EditorScreen(
                                 }
                             },
                             update = { view ->
-                                if (view.player != exoPlayer) {
+                                if (view.player !== exoPlayer) {
                                     view.player = exoPlayer
+                                }
+                                val target = uiState.rotationDegrees.toFloat()
+                                if (view.rotation != target) {
+                                    view.rotation = target
                                 }
                             },
                             modifier = Modifier.size(viewWidthDp, viewHeightDp)
@@ -396,9 +432,11 @@ fun EditorScreen(
 
                     // Vector Annotation Canvas layered directly on top of video
                     AnnotationOverlay(
-                        shapes = uiState.annotations,
+                        shapes = uiState.annotations.map { it.shape },
                         selectedIndex = uiState.selectedAnnotationIndex,
                         showHandles = (!isPlaying),
+                        rotationDegrees = uiState.rotationDegrees,
+                        frameAspect = rawWidth / rawHeight,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -410,7 +448,13 @@ fun EditorScreen(
 /**
  * Finds the closest control point handle within [thresholdPx] pixels.
  */
-private fun findHitHandle(shapes: List<AnnotationShape>, touch: Offset, thresholdPx: Float = 160f): Pair<Int, Int>? {
+private fun findHitHandle(
+    shapes: List<AnnotationShape>,
+    touch: Offset,
+    thresholdPx: Float,
+): Pair<Int, Int>? {
+    var best: Pair<Int, Int>? = null
+    var bestDist = Float.MAX_VALUE
     shapes.forEachIndexed { shapeIndex, shape ->
         val handles = when (shape) {
             is AnnotationShape.Line -> listOf(shape.start, shape.end)
@@ -418,23 +462,32 @@ private fun findHitHandle(shapes: List<AnnotationShape>, touch: Offset, threshol
             is AnnotationShape.Circle -> listOf(shape.center, shape.center + Offset(shape.radius, 0f))
         }
         handles.forEachIndexed { handleIndex, handleOffset ->
-            val dist = hypot((touch.x - handleOffset.x).toDouble(), (touch.y - handleOffset.y).toDouble()).toFloat()
-            if (dist <= thresholdPx) {
-                return Pair(shapeIndex, handleIndex)
+            val dist = hypot(
+                (touch.x - handleOffset.x).toDouble(),
+                (touch.y - handleOffset.y).toDouble(),
+            ).toFloat()
+            if (dist <= thresholdPx && dist < bestDist) {
+                bestDist = dist
+                best = shapeIndex to handleIndex
             }
         }
     }
-    return null
+    return best
 }
 
-/**
- * Finds the shape index that contains or intersects the given touch offset.
- */
-private fun findHitShape(shapes: List<AnnotationShape>, touch: Offset): Int? {
+private fun findHitShape(
+    shapes: List<AnnotationShape>,
+    touch: Offset,
+    thresholdPx: Float,
+): Int? {
+    var best: Int? = null
+    var bestDist = Float.MAX_VALUE
     shapes.forEachIndexed { index, shape ->
-        if (HitTesting.hitTest(shape, touch, touchSlop = 80f)) {
-            return index
+        val d = HitTesting.distanceTo(shape, touch)
+        if (d <= thresholdPx && d < bestDist) {
+            bestDist = d
+            best = index
         }
     }
-    return null
+    return best
 }

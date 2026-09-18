@@ -31,7 +31,7 @@ interface ProjectDao {
 
 @Dao
 interface AnnotationDao {
-    @Query("SELECT * FROM annotations WHERE projectId = :projectId AND frameIndex = :frameIndex")
+    @Query("SELECT * FROM annotations WHERE projectId = :projectId AND frameIndex = :frameIndex ORDER BY id ASC")
     fun observeForFrame(projectId: Long, frameIndex: Int): Flow<List<AnnotationEntity>>
 
     @Query("SELECT * FROM annotations WHERE projectId = :projectId ORDER BY id ASC")
@@ -45,6 +45,12 @@ interface AnnotationDao {
 
     @Delete
     suspend fun delete(annotation: AnnotationEntity)
+
+    @Query("DELETE FROM annotations WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM annotations WHERE projectId = :projectId AND frameIndex = :frameIndex")
+    suspend fun deleteAllForFrame(projectId: Long, frameIndex: Int)
 
     @Query("DELETE FROM annotations WHERE projectId = :projectId")
     suspend fun deleteAllForProject(projectId: Long)

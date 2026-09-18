@@ -23,6 +23,8 @@ fun AnnotationOverlay(
     modifier: Modifier = Modifier,
     selectedIndex: Int? = null,
     showHandles: Boolean = true,
+    rotationDegrees: Int = 0,
+    frameAspect: Float = 1f,
     lineColor: Color = Color(0xFFFF6D00),
     angleColor: Color = Color(0xFF00E676),
     circleColor: Color = Color(0xFF448AFF),
@@ -38,7 +40,9 @@ fun AnnotationOverlay(
             val isSelected = (index == selectedIndex)
             val stroke = if (isSelected) strokeWidth * 1.3f else strokeWidth
 
-            val pixelShape = shape.toPixelSpace(w, h)
+            val pixelShape = shape
+                .rotateNorm(rotationDegrees, frameAspect)
+                .toPixelSpace(w, h)
 
             when (pixelShape) {
                 is AnnotationShape.Line -> drawAnnotationLine(
@@ -81,6 +85,15 @@ fun Offset.rotateNorm(degrees: Int): Offset {
     }
 }
 
+/** Rotates a normalized *vector* (no translation term). Use for drag deltas. */
+fun Offset.rotateVectorNorm(degrees: Int): Offset =
+    when ((degrees % 360 + 360) % 360) {
+        90 -> Offset(-y, x)
+        180 -> Offset(-x, -y)
+        270 -> Offset(y, -x)
+        else -> this
+    }
+
 fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
     val normDegrees = (degrees % 360 + 360) % 360
     if (normDegrees == 0) return this
@@ -90,7 +103,7 @@ fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
         is AnnotationShape.Angle -> AnnotationShape.Angle(start.rotateNorm(normDegrees), center.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
         is AnnotationShape.Circle -> {
             val newRadius = if (normDegrees == 90 || normDegrees == 270) {
-                radius / aspect // aspect is original width / height
+                radius * aspect // aspect is original width / height
             } else {
                 radius
             }
