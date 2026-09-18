@@ -155,6 +155,9 @@ fun EditorScreen(
             }
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                if (playing) {
+                    viewModel.selectAnnotation(null)
+                }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) {
@@ -267,6 +270,7 @@ fun EditorScreen(
                                     val player = exoPlayer ?: return@Slider
                                     if (!isScrubbing) {
                                         isScrubbing = true
+                                        viewModel.selectAnnotation(null)
                                         player.pause()
                                         player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
                                     }

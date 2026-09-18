@@ -19,7 +19,7 @@ import kotlin.math.hypot
 
 /**
  * Composable Canvas overlay that renders annotation shapes on top of a video frame.
- * Includes interactive handle indicators and measurement values.
+ * Includes interactive handle indicators and measurement values for the selected shape.
  */
 @Composable
 fun AnnotationOverlay(
@@ -53,11 +53,11 @@ fun AnnotationOverlay(
         if (w <= 0f || h <= 0f) return@Canvas
 
         val toSource = if (sourceWidthPx > 0f) sourceWidthPx / w else 0f
-        val totalCount = shapes.size
 
         shapes.forEachIndexed { index, shape ->
             val isSelected = (index == selectedIndex)
             val stroke = if (isSelected) strokePx * 1.3f else strokePx
+            val drawHandlesForShape = showHandles && isSelected
 
             val pixelShape = shape
                 .rotateNorm(rotationDegrees, frameAspect)
@@ -68,9 +68,7 @@ fun AnnotationOverlay(
                     line = pixelShape,
                     color = if (isSelected) selectedColor else lineColor,
                     strokeWidth = stroke,
-                    showHandles = showHandles,
-                    isSelected = isSelected,
-                    totalShapesCount = totalCount,
+                    showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                     toSource = toSource,
@@ -80,9 +78,7 @@ fun AnnotationOverlay(
                     angle = pixelShape,
                     color = if (isSelected) selectedColor else angleColor,
                     strokeWidth = stroke,
-                    showHandles = showHandles,
-                    isSelected = isSelected,
-                    totalShapesCount = totalCount,
+                    showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                 )
@@ -90,9 +86,7 @@ fun AnnotationOverlay(
                     circle = pixelShape,
                     color = if (isSelected) selectedColor else circleColor,
                     strokeWidth = stroke,
-                    showHandles = showHandles,
-                    isSelected = isSelected,
-                    totalShapesCount = totalCount,
+                    showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
                     textPaint = textPaint,
                     toSource = toSource,
@@ -159,8 +153,6 @@ private fun DrawScope.drawAnnotationLine(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
-    isSelected: Boolean,
-    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
     toSource: Float,
@@ -176,9 +168,7 @@ private fun DrawScope.drawAnnotationLine(
     if (showHandles) {
         drawHandle(line.start, color, handleRadius)
         drawHandle(line.end, color, handleRadius)
-    }
 
-    if (showHandles && (isSelected || totalShapesCount <= 3)) {
         // Distance text readout in source video pixels (or % if source width is unknown)
         val len = hypot((line.end.x - line.start.x).toDouble(), (line.end.y - line.start.y).toDouble()).toFloat()
         val text = if (toSource > 0f) {
@@ -197,8 +187,6 @@ private fun DrawScope.drawAnnotationAngle(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
-    isSelected: Boolean,
-    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
 ) {
@@ -210,9 +198,7 @@ private fun DrawScope.drawAnnotationAngle(
         drawHandle(angle.start, color, handleRadius)
         drawHandle(angle.center, color, handleRadius)
         drawHandle(angle.end, color, handleRadius)
-    }
 
-    if (showHandles && (isSelected || totalShapesCount <= 3)) {
         // Render angle text in degrees
         val degrees = angle.degrees()
         val text = String.format(Locale.US, "%.1f°", degrees)
@@ -227,8 +213,6 @@ private fun DrawScope.drawAnnotationCircle(
     color: Color,
     strokeWidth: Float,
     showHandles: Boolean,
-    isSelected: Boolean,
-    totalShapesCount: Int,
     handleRadius: Float,
     textPaint: Paint,
     toSource: Float,
@@ -243,9 +227,7 @@ private fun DrawScope.drawAnnotationCircle(
     if (showHandles) {
         drawHandle(circle.center, color, handleRadius)
         drawHandle(circle.center + Offset(circle.radius, 0f), color, handleRadius)
-    }
 
-    if (showHandles && (isSelected || totalShapesCount <= 3)) {
         // Radius text readout in source video pixels (or % if source width is unknown)
         val text = if (toSource > 0f) {
             String.format(Locale.US, "r: %.0f px", circle.radius * toSource)
