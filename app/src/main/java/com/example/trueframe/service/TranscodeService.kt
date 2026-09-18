@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import com.example.trueframe.core.video.ProxyTranscoder
+import com.example.trueframe.core.video.TranscodeBus
+import com.example.trueframe.core.video.TranscodeEvent
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +30,9 @@ class TranscodeService : Service() {
 
     @Inject
     lateinit var projectRepository: ProjectRepository
+
+    @Inject
+    lateinit var transcodeBus: TranscodeBus
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -67,18 +72,20 @@ class TranscodeService : Service() {
                             val percent = (state.fraction * 100).toInt()
                             val updateNotification = buildNotification("Transcoding video… $percent%")
                             manager.notify(NOTIFICATION_ID, updateNotification)
+                            transcodeBus.setProgress(projectId, state.fraction)
                         }
                         is ProxyTranscoder.TranscodeState.Complete -> {
-                            // Update project in DB with the new proxyUri
                             launch {
                                 val project = projectRepository.getById(projectId)
                                 if (project != null) {
                                     projectRepository.update(project.copy(proxyUri = outputPath))
                                 }
+                                transcodeBus.finish(TranscodeEvent.Completed(projectId, outputPath), projectId)
                                 stopSelf()
                             }
                         }
                         is ProxyTranscoder.TranscodeState.Error -> {
+                            transcodeBus.finish(TranscodeEvent.Failed(projectId, state.cause.message), projectId)
                             stopSelf()
                         }
                         else -> {}

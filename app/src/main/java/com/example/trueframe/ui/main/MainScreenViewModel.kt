@@ -6,7 +6,8 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.trueframe.core.video.ProxyTranscoder
+import com.example.trueframe.core.video.TranscodeBus
+import com.example.trueframe.core.video.TranscodeEvent
 import com.example.trueframe.data.ProjectEntity
 import com.example.trueframe.data.ProxyCacheManager
 import com.example.trueframe.data.repository.ProjectRepository
@@ -36,11 +37,16 @@ class MainScreenViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val projectRepository: ProjectRepository,
     private val proxyCacheManager: ProxyCacheManager,
-    val proxyTranscoder: ProxyTranscoder,
+    private val transcodeBus: TranscodeBus,
 ) : ViewModel() {
 
     private val _projectsError = MutableStateFlow<String?>(null)
     val projectsError: StateFlow<String?> = _projectsError
+
+    val transcodeProgress: StateFlow<Map<Long, Float>> = transcodeBus.progress
+
+    private val _activeTranscodeProjectId = MutableStateFlow<Long?>(null)
+    val activeTranscodeProjectId: StateFlow<Long?> = _activeTranscodeProjectId.asStateFlow()
     
     val uiState: StateFlow<MainScreenUiState> =
         projectRepository.observeAll()
@@ -49,28 +55,25 @@ class MainScreenViewModel @Inject constructor(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MainScreenUiState.Loading)
 
     init {
-        // Monitor transcode state to update proxy URI when done
         viewModelScope.launch {
-            proxyTranscoder.state.collect { state ->
-                if (state is ProxyTranscoder.TranscodeState.Complete) {
-                    _activeTranscodeProjectId.value?.let { projectId ->
-                        val project = projectRepository.getById(projectId)
+            transcodeBus.events.collect { event ->
+                when (event) {
+                    is TranscodeEvent.Completed -> {
+                        val project = projectRepository.getById(event.projectId)
                         if (project != null) {
-                            val proxyPath = proxyCacheManager.generateProxyPath(projectId)
+                            val proxyPath = proxyCacheManager.generateProxyPath(event.projectId)
                             projectRepository.update(project.copy(proxyUri = proxyPath))
                         }
+                        _activeTranscodeProjectId.value = null
                     }
-                    _activeTranscodeProjectId.value = null
-                } else if (state is ProxyTranscoder.TranscodeState.Error) {
-                    _projectsError.update { "Transcode failed: ${state.cause.message}" }
-                    _activeTranscodeProjectId.value = null
+                    is TranscodeEvent.Failed -> {
+                        _projectsError.update { "Transcode failed: ${event.message}" }
+                        _activeTranscodeProjectId.value = null
+                    }
                 }
             }
         }
     }
-
-    private val _activeTranscodeProjectId = MutableStateFlow<Long?>(null)
-    val activeTranscodeProjectId: StateFlow<Long?> = _activeTranscodeProjectId.asStateFlow()
 
     fun clearError() {
         _projectsError.update { null }

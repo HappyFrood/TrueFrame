@@ -166,7 +166,11 @@ class ProxyReader {
         private val frameIntervalUs: Long = 33_333L,
     ) {
         private var retriever: MediaMetadataRetriever? = null
-        private val cache = LruCache<Long, Bitmap>(60)
+        private val cache = object : LruCache<Long, Bitmap>(
+            (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()
+        ) {
+            override fun sizeOf(key: Long, value: Bitmap) = value.byteCount / 1024
+        }
 
         @Synchronized
         private fun getRetriever(): MediaMetadataRetriever {
@@ -230,6 +234,19 @@ class ProxyReader {
         suspend fun getFrameRate(): Float = withContext(Dispatchers.IO) {
             try {
                 val r = getRetriever()
+                val frameCountStr = synchronized(this@Session) {
+                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)
+                }
+                val durationStr = synchronized(this@Session) {
+                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                }
+                val frameCount = frameCountStr?.toFloatOrNull()
+                val durationMs = durationStr?.toFloatOrNull()
+                if (frameCount != null && frameCount > 0 && durationMs != null && durationMs > 0) {
+                    val fps = frameCount / (durationMs / 1000f)
+                    if (fps > 0) return@withContext fps
+                }
+
                 val captureRateStr = synchronized(this@Session) {
                     r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
                 }
@@ -332,6 +349,10 @@ class FrameIndex {
                     frames.add(FrameInfo(index++, timeUs))
                     extractor.advance()
                 }
+                frames.sortBy { it.presentationTimeUs }
+                val sorted = frames.mapIndexed { idx, item -> FrameInfo(idx, item.presentationTimeUs) }
+                frames.clear()
+                frames.addAll(sorted)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -375,6 +396,8 @@ class PlaybackClock {
     }
 
     var speed: Speed = Speed.NORMAL
+        private set
+
     var isPlaying: Boolean = false
         private set
 
@@ -388,7 +411,16 @@ class PlaybackClock {
     }
 
     fun pause() {
+        startFrameTimeUs = currentTimeUs()
         isPlaying = false
+    }
+
+    fun setSpeed(newSpeed: Speed) {
+        if (isPlaying) {
+            startFrameTimeUs = currentTimeUs()
+            startTimeNs = System.nanoTime()
+        }
+        speed = newSpeed
     }
 
     /**

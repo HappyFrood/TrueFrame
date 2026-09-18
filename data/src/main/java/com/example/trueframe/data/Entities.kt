@@ -11,6 +11,8 @@ data class ProjectEntity(
     val name: String,
     val videoUri: String,
     val proxyUri: String? = null,
+    val transcodeState: String = "PENDING",   // PENDING | RUNNING | COMPLETE | ERROR
+    val rotationDegrees: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )
@@ -25,7 +27,7 @@ data class ProjectEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("projectId")],
+    indices = [Index(value = ["projectId", "frameIndex"])],
 )
 data class AnnotationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

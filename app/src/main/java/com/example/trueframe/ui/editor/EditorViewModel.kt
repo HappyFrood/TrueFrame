@@ -62,7 +62,7 @@ class EditorViewModel @Inject constructor(
             val project = projectRepository.getById(projectId)
             if (project != null) {
                 val uri = project.proxyUri ?: project.videoUri
-                _uiState.update { it.copy(videoUri = uri) }
+                _uiState.update { it.copy(videoUri = uri, rotationDegrees = project.rotationDegrees) }
             } else {
                 _uiState.update { it.copy(error = "Project not found") }
             }
@@ -97,7 +97,13 @@ class EditorViewModel @Inject constructor(
     }
 
     fun rotateVideo() {
-        _uiState.update { it.copy(rotationDegrees = (it.rotationDegrees + 90) % 360) }
+        val next = (_uiState.value.rotationDegrees + 90) % 360
+        _uiState.update { it.copy(rotationDegrees = next) }
+        viewModelScope.launch {
+            projectRepository.getById(projectId)?.let {
+                projectRepository.update(it.copy(rotationDegrees = next, updatedAt = System.currentTimeMillis()))
+            }
+        }
     }
 
     fun selectAnnotation(index: Int?) {

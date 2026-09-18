@@ -35,7 +35,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import com.example.trueframe.Editor
-import com.example.trueframe.core.video.ProxyTranscoder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,8 +45,7 @@ fun MainScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val error by viewModel.projectsError.collectAsStateWithLifecycle()
-    val transcodeState by viewModel.proxyTranscoder.state.collectAsStateWithLifecycle()
-    val activeProjectId by viewModel.activeTranscodeProjectId.collectAsStateWithLifecycle()
+    val progressMap by viewModel.transcodeProgress.collectAsStateWithLifecycle()
     
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -81,10 +79,10 @@ fun MainScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (transcodeState is ProxyTranscoder.TranscodeState.Progress) {
-                val fraction = (transcodeState as ProxyTranscoder.TranscodeState.Progress).fraction
+            val activeProgress = progressMap.values.firstOrNull()
+            if (activeProgress != null) {
                 LinearProgressIndicator(
-                    progress = { fraction },
+                    progress = { activeProgress },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -112,8 +110,9 @@ fun MainScreen(
                                 Column {
                                     Text(text = project.name)
                                     if (project.proxyUri == null) {
-                                        val progressText = if (project.id == activeProjectId && transcodeState is ProxyTranscoder.TranscodeState.Progress) {
-                                            val percent = ((transcodeState as ProxyTranscoder.TranscodeState.Progress).fraction * 100).toInt()
+                                        val projectProgress = progressMap[project.id]
+                                        val progressText = if (projectProgress != null) {
+                                            val percent = (projectProgress * 100).toInt()
                                             "Processing... $percent%"
                                         } else {
                                             "Processing..."

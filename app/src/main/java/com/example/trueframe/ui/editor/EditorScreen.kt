@@ -60,12 +60,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.trueframe.core.annotation.AnnotationOverlay
@@ -88,7 +92,9 @@ fun EditorScreen(
     modifier: Modifier = Modifier,
     viewModel: EditorViewModel = hiltViewModel(),
 ) {
-    viewModel.initialize(projectId)
+    LaunchedEffect(projectId) {
+        viewModel.initialize(projectId)
+    }
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -97,8 +103,9 @@ fun EditorScreen(
     val currentAnnotations by rememberUpdatedState(uiState.annotations)
 
     var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var totalDurationMs by remember { mutableLongStateOf(1000L) }
+    var totalDurationMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
+    var isScrubbing by remember { mutableStateOf(false) }
 
     var videoW by remember { mutableIntStateOf(0) }
     var videoH by remember { mutableIntStateOf(0) }
@@ -161,6 +168,15 @@ fun EditorScreen(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) exoPlayer?.pause()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Poll ONLY while playing — required by the "no permanent polling loops" rule.
@@ -234,11 +250,22 @@ fun EditorScreen(
                             Slider(
                                 value = currentPositionMs.toFloat().coerceIn(0f, totalDurationMs.toFloat()),
                                 onValueChange = { newMs ->
-                                    exoPlayer?.pause()
-                                    exoPlayer?.seekTo(newMs.toLong())
+                                    val player = exoPlayer ?: return@Slider
+                                    if (!isScrubbing) {
+                                        isScrubbing = true
+                                        player.pause()
+                                        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                                    }
+                                    player.seekTo(newMs.toLong())
                                     currentPositionMs = newMs.toLong()
                                 },
-                                valueRange = 0f..totalDurationMs.toFloat(),
+                                onValueChangeFinished = {
+                                    val player = exoPlayer ?: return@Slider
+                                    player.setSeekParameters(SeekParameters.EXACT)
+                                    player.seekTo(currentPositionMs)
+                                    isScrubbing = false
+                                },
+                                valueRange = 0f..totalDurationMs.toFloat().coerceAtLeast(1f),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
