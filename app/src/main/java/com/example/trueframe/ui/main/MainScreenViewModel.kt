@@ -61,8 +61,7 @@ class MainScreenViewModel @Inject constructor(
                     is TranscodeEvent.Completed -> {
                         val project = projectRepository.getById(event.projectId)
                         if (project != null) {
-                            val proxyPath = proxyCacheManager.generateProxyPath(event.projectId)
-                            projectRepository.update(project.copy(proxyUri = proxyPath))
+                            projectRepository.update(project.copy(proxyUri = event.proxyUri))
                         }
                         _activeTranscodeProjectId.value = null
                     }

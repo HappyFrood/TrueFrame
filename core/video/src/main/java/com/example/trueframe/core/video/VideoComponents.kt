@@ -92,12 +92,24 @@ class ProxyTranscoder {
                 }
             }
 
+            val cleanFormat = MediaFormat.createVideoFormat(
+                format.getString(MediaFormat.KEY_MIME) ?: MediaFormat.MIMETYPE_VIDEO_AVC,
+                format.getInteger(MediaFormat.KEY_WIDTH),
+                format.getInteger(MediaFormat.KEY_HEIGHT)
+            )
+            if (format.containsKey("csd-0")) {
+                cleanFormat.setByteBuffer("csd-0", format.getByteBuffer("csd-0"))
+            }
+            if (format.containsKey("csd-1")) {
+                cleanFormat.setByteBuffer("csd-1", format.getByteBuffer("csd-1"))
+            }
+
             val actualOutputPath = outputPath.removePrefix("file://")
             muxer = MediaMuxer(actualOutputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             if (rotation != 0) {
                 muxer.setOrientationHint(rotation)
             }
-            val outputTrack = muxer.addTrack(format)
+            val outputTrack = muxer.addTrack(cleanFormat)
             muxer.start()
             
             // Allocate a larger buffer to handle 4K frames

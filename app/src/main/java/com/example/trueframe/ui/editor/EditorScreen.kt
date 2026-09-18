@@ -138,8 +138,14 @@ fun EditorScreen(
         val player = exoPlayer ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(size: VideoSize) {
-                videoW = size.width
-                videoH = size.height
+                val rot = size.unappliedRotationDegrees
+                if (rot == 90 || rot == 270) {
+                    videoW = size.height
+                    videoH = size.width
+                } else {
+                    videoW = size.width
+                    videoH = size.height
+                }
                 pixelRatio = if (size.pixelWidthHeightRatio > 0f) size.pixelWidthHeightRatio else 1f
                 viewModel.updatePlayerState(player.currentPosition, totalDurationMs, isPlaying, frameRate)
             }

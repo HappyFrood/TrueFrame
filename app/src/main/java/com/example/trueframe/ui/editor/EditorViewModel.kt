@@ -9,11 +9,13 @@ import com.example.trueframe.data.AnnotationEntity
 import com.example.trueframe.data.AnnotationJson
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 import kotlin.math.hypot
 
@@ -41,6 +43,7 @@ class EditorViewModel @Inject constructor(
 ) : ViewModel() {
 
     private var projectId: Long = -1L
+    private var observeAnnotationsJob: Job? = null
 
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
@@ -52,20 +55,30 @@ class EditorViewModel @Inject constructor(
     fun onDragStarted() { isDragging = true }
 
     fun initialize(id: Long) {
-        if (projectId != -1L) return
+        if (projectId == id) return
         projectId = id
+
+        _uiState.value = EditorUiState()
 
         viewModelScope.launch {
             val project = projectRepository.getById(projectId)
             if (project != null) {
-                val uri = project.proxyUri ?: project.videoUri
+                val proxyUri = project.proxyUri
+                val validProxy = if (proxyUri != null) {
+                    val cleanPath = proxyUri.removePrefix("file://")
+                    val file = File(cleanPath)
+                    if (file.exists() && file.length() > 0) proxyUri else null
+                } else null
+
+                val uri = validProxy ?: project.videoUri
                 _uiState.update { it.copy(videoUri = uri, rotationDegrees = project.rotationDegrees) }
             } else {
                 _uiState.update { it.copy(error = "Project not found") }
             }
         }
 
-        viewModelScope.launch {
+        observeAnnotationsJob?.cancel()
+        observeAnnotationsJob = viewModelScope.launch {
             annotationDao.observeForProject(projectId).collect { entities ->
                 if (isDragging) return@collect          // never clobber a live drag
                 val items = entities.mapNotNull { e ->
