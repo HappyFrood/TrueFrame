@@ -2,7 +2,7 @@ package com.example.trueframe.ui.main
 
 import android.content.Context
 import android.content.ContextWrapper
-import com.example.trueframe.core.video.ProxyTranscoder
+import com.example.trueframe.core.video.TranscodeBus
 import com.example.trueframe.data.ProjectDao
 import com.example.trueframe.data.ProjectEntity
 import com.example.trueframe.data.ProxyCacheManager
@@ -21,13 +21,13 @@ class MainScreenViewModelTest {
         val fakeContext = ContextWrapper(null)
         val projectRepo = ProjectRepository(fakeDao)
         val proxyCacheManager = ProxyCacheManager(fakeContext, fakeDao)
-        val proxyTranscoder = ProxyTranscoder()
+        val transcodeBus = TranscodeBus()
 
         val viewModel = MainScreenViewModel(
             context = fakeContext,
             projectRepository = projectRepo,
             proxyCacheManager = proxyCacheManager,
-            proxyTranscoder = proxyTranscoder
+            transcodeBus = transcodeBus
         )
         assertEquals(viewModel.uiState.first(), MainScreenUiState.Loading)
     }

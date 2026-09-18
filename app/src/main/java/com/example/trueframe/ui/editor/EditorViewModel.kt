@@ -9,11 +9,9 @@ import com.example.trueframe.data.AnnotationEntity
 import com.example.trueframe.data.AnnotationJson
 import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -53,7 +51,6 @@ class EditorViewModel @Inject constructor(
 
     fun onDragStarted() { isDragging = true }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     fun initialize(id: Long) {
         if (projectId != -1L) return
         projectId = id
@@ -69,15 +66,13 @@ class EditorViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            _frameIndexFlow
-                .flatMapLatest { frame -> annotationDao.observeForFrame(projectId, frame) }
-                .collect { entities ->
-                    if (isDragging) return@collect          // never clobber a live drag
-                    val items = entities.mapNotNull { e ->
-                        AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, it) }
-                    }
-                    _uiState.update { it.copy(annotations = items) }
+            annotationDao.observeForProject(projectId).collect { entities ->
+                if (isDragging) return@collect          // never clobber a live drag
+                val items = entities.mapNotNull { e ->
+                    AnnotationJson.deserialize(e.serializedData)?.let { AnnotationItem(e.id, it) }
                 }
+                _uiState.update { it.copy(annotations = items) }
+            }
         }
     }
 
@@ -240,9 +235,8 @@ class EditorViewModel @Inject constructor(
     }
 
     fun clearAllAnnotations() {
-        val frame = _uiState.value.frameIndex
         viewModelScope.launch {
-            annotationDao.deleteAllForFrame(projectId, frame)
+            annotationDao.deleteAllForProject(projectId)
             _uiState.update { it.copy(selectedAnnotationIndex = null) }
         }
     }

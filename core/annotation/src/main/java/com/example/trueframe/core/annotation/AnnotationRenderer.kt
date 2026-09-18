@@ -36,7 +36,7 @@ fun AnnotationOverlay(
 ) {
     val density = LocalDensity.current
     val strokePx = with(density) { 3.dp.toPx() }
-    val handlePx = with(density) { 24.dp.toPx() }
+    val handlePx = with(density) { 18.dp.toPx() }
     val textPaint = remember {
         Paint().apply {
             textSize = with(density) { 16.dp.toPx() }
