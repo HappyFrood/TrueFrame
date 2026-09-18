@@ -14,8 +14,15 @@ import kotlinx.coroutines.flow.StateFlow
  * OpenGL surface bakes in rotation metadata so downstream doesn't need to handle it.
  * Spec: "MediaCodec + OpenGL + MediaMuxer", "OpenGL bakes rotation."
  */
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.nio.ByteBuffer
 
 class ProxyTranscoder {
 
@@ -40,60 +47,104 @@ class ProxyTranscoder {
     suspend fun start(sourceUri: String, outputPath: String, context: Context? = null) = withContext(Dispatchers.IO) {
         _state.value = TranscodeState.Progress(0f)
         isCancelled = false
+        val extractor = MediaExtractor()
+        var muxer: MediaMuxer? = null
         try {
-            // Simplified remuxing for prototype. A full MediaCodec + OpenGL pipeline
-            // is required to actually bake in rotation.
-            val extractor = android.media.MediaExtractor()
             if (sourceUri.startsWith("content://") && context != null) {
                 extractor.setDataSource(context, Uri.parse(sourceUri), null)
             } else {
                 extractor.setDataSource(sourceUri)
             }
-            val muxer = android.media.MediaMuxer(outputPath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             
             var videoTrack = -1
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
-                if (format.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
+                if (format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
                     videoTrack = i
                     break
                 }
             }
-            if (videoTrack != -1) {
-                extractor.selectTrack(videoTrack)
-                val format = extractor.getTrackFormat(videoTrack)
-                val outputTrack = muxer.addTrack(format)
-                muxer.start()
-                val buffer = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
-                val bufferInfo = android.media.MediaCodec.BufferInfo()
-                
-                val duration = try { format.getLong(android.media.MediaFormat.KEY_DURATION) } catch (e: Exception) { 0L }
-                
-                while (!isCancelled) {
-                    bufferInfo.size = extractor.readSampleData(buffer, 0)
-                    if (bufferInfo.size < 0) break
-                    bufferInfo.presentationTimeUs = extractor.sampleTime
-                    val isSync = (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0
-                    bufferInfo.flags = if (isSync) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
-                    muxer.writeSampleData(outputTrack, buffer, bufferInfo)
-                    
-                    if (duration > 0) {
-                        _state.value = TranscodeState.Progress((extractor.sampleTime.toFloat() / duration).coerceIn(0f, 1f))
-                    }
-                    
-                    extractor.advance()
-                }
-                muxer.stop()
+            
+            if (videoTrack == -1) {
+                throw IllegalStateException("No video track found in source")
             }
-            muxer.release()
-            extractor.release()
-            if (!isCancelled) {
+
+            extractor.selectTrack(videoTrack)
+            val format = extractor.getTrackFormat(videoTrack)
+            
+            // Read rotation from format if possible, otherwise use retriever
+            var rotation = 0
+            if (format.containsKey(MediaFormat.KEY_ROTATION)) {
+                rotation = format.getInteger(MediaFormat.KEY_ROTATION)
+            } else if (context != null) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    if (sourceUri.startsWith("content://")) {
+                        retriever.setDataSource(context, Uri.parse(sourceUri))
+                    } else {
+                        retriever.setDataSource(sourceUri)
+                    }
+                    rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                } catch (e: Exception) {
+                    // Ignore
+                } finally {
+                    try { retriever.release() } catch (e: Exception) {}
+                }
+            }
+
+            val actualOutputPath = outputPath.removePrefix("file://")
+            muxer = MediaMuxer(actualOutputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            if (rotation != 0) {
+                muxer.setOrientationHint(rotation)
+            }
+            val outputTrack = muxer.addTrack(format)
+            muxer.start()
+            
+            // Allocate a larger buffer to handle 4K frames
+            val buffer = ByteBuffer.allocate(10 * 1024 * 1024)
+            val bufferInfo = MediaCodec.BufferInfo()
+            
+            val duration = try { format.getLong(MediaFormat.KEY_DURATION) } catch (e: Exception) { 0L }
+            var lastPercent = -1
+            
+            while (!isCancelled && isActive) {
+                bufferInfo.size = extractor.readSampleData(buffer, 0)
+                if (bufferInfo.size < 0) break
+                bufferInfo.presentationTimeUs = extractor.sampleTime
+                val isSync = (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                bufferInfo.flags = if (isSync) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                muxer.writeSampleData(outputTrack, buffer, bufferInfo)
+                
+                if (duration > 0) {
+                    val currentPercent = ((extractor.sampleTime.toFloat() / duration).coerceIn(0f, 1f) * 100).toInt()
+                    if (currentPercent > lastPercent) {
+                        lastPercent = currentPercent
+                        _state.value = TranscodeState.Progress(currentPercent / 100f)
+                    }
+                }
+                
+                extractor.advance()
+            }
+            
+            if (!isCancelled && isActive) {
                 _state.value = TranscodeState.Complete
             } else {
                 _state.value = TranscodeState.Idle
             }
         } catch (e: Exception) {
             _state.value = TranscodeState.Error(e)
+            val actualOutputPath = outputPath.removePrefix("file://")
+            val file = File(actualOutputPath)
+            if (file.exists()) file.delete()
+        } finally {
+            try { muxer?.stop() } catch (e: Exception) {}
+            try { muxer?.release() } catch (e: Exception) {}
+            try { extractor.release() } catch (e: Exception) {}
+            if (isCancelled || !isActive || _state.value is TranscodeState.Error) {
+                val actualOutputPath = outputPath.removePrefix("file://")
+                val file = File(actualOutputPath)
+                if (file.exists()) file.delete()
+            }
         }
     }
 

@@ -4,7 +4,6 @@
 package com.example.trueframe.ui.editor
 
 import android.net.Uri
-import android.view.TextureView
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,6 +55,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -68,6 +68,8 @@ import androidx.media3.ui.PlayerView
 import com.example.trueframe.core.annotation.AnnotationOverlay
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.HitTesting
+import com.example.trueframe.core.annotation.rotateNorm
+import com.example.trueframe.core.annotation.toPixelSpace
 import com.example.trueframe.core.annotation.toPixelSpace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -292,7 +294,7 @@ fun EditorScreen(
             ) {
                 val containerWidth = maxWidth
                 val containerHeight = maxHeight
-                val density = LocalContext.current.resources.displayMetrics.density
+                val density = LocalDensity.current.density
 
                 val videoSize = exoPlayer?.videoSize
                 val rawWidth = if (videoSize != null && videoSize.width > 0) videoSize.width.toFloat() else 1080f
@@ -312,8 +314,8 @@ fun EditorScreen(
                     Pair(containerHeight * videoAspect, containerHeight)
                 }
 
-                val vw = (fittedWidthDp.value * density).coerceAtLeast(100f)
-                val vh = (fittedHeightDp.value * density).coerceAtLeast(100f)
+                val vw = fittedWidthDp.value * density
+                val vh = fittedHeightDp.value * density
                 val aspectCorrection = vh / vw
 
                 val viewWidthDp = if (isSideways) fittedHeightDp else fittedWidthDp
@@ -325,7 +327,8 @@ fun EditorScreen(
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { startOffset ->
-                                    val pixelShapes = currentAnnotations.map { it.toPixelSpace(vw, vh) }
+                                    val rotatedShapes = currentAnnotations.map { it.rotateNorm(uiState.rotationDegrees, rawWidth / rawHeight) }
+                                    val pixelShapes = rotatedShapes.map { it.toPixelSpace(vw, vh) }
                                     val handleHit = findHitHandle(pixelShapes, startOffset, thresholdPx = 160f)
                                     if (handleHit != null) {
                                         activeDragTarget = handleHit
@@ -343,10 +346,14 @@ fun EditorScreen(
                                     val normPos = Offset(change.position.x / vw, change.position.y / vh)
                                     val normDelta = Offset(dragAmount.x / vw, dragAmount.y / vh)
 
+                                    val unrotatedPos = normPos.rotateNorm(-uiState.rotationDegrees)
+                                    val unrotatedDelta = normDelta.rotateNorm(-uiState.rotationDegrees)
+
                                     activeDragTarget?.let { (shapeIdx, handleIdx) ->
-                                        viewModel.updateShapeHandle(shapeIdx, handleIdx, normPos, aspectCorrection = aspectCorrection)
+                                        // The aspect correction for the handle update needs to be the original aspect
+                                        viewModel.updateShapeHandle(shapeIdx, handleIdx, unrotatedPos, aspectCorrection = rawHeight / rawWidth)
                                     } ?: activeShapeDragIndex?.let { shapeIdx ->
-                                        viewModel.offsetShape(shapeIdx, normDelta)
+                                        viewModel.offsetShape(shapeIdx, unrotatedDelta)
                                     }
                                 },
                                 onDragEnd = {
@@ -355,7 +362,8 @@ fun EditorScreen(
                                     viewModel.persistAnnotationsOnDragEnd()
                                 }
                             )
-                        }
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
                     if (exoPlayer != null) {
                         AndroidView(
@@ -364,22 +372,17 @@ fun EditorScreen(
                                     player = exoPlayer
                                     useController = false
                                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    // Disable touch consumption so parent Box can detect drag gestures
+                                    isClickable = false
+                                    isFocusable = false
                                 }
                             },
                             update = { view ->
-                                view.player = exoPlayer
-                                view.rotation = uiState.rotationDegrees.toFloat()
-                            },
-                            modifier = Modifier
-                                .size(viewWidthDp, viewHeightDp)
-                                .pointerInput(Unit) {
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                                            event.changes.forEach { it.consume() }
-                                        }
-                                    }
+                                if (view.player != exoPlayer) {
+                                    view.player = exoPlayer
                                 }
+                            },
+                            modifier = Modifier.size(viewWidthDp, viewHeightDp)
                         )
                     } else {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

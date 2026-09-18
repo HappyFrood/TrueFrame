@@ -8,12 +8,15 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import com.example.trueframe.core.video.ProxyTranscoder
+import com.example.trueframe.data.repository.ProjectRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+import kotlinx.coroutines.cancel
 
 /**
  * Foreground service to run video transcoding in the background.
@@ -24,13 +27,14 @@ import javax.inject.Inject
 class TranscodeService : Service() {
 
     @Inject
-    lateinit var proxyTranscoder: ProxyTranscoder
+    lateinit var projectRepository: ProjectRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
         const val CHANNEL_ID = "transcode_channel"
         const val NOTIFICATION_ID = 1
+        const val EXTRA_PROJECT_ID = "project_id"
         const val EXTRA_SOURCE_URI = "source_uri"
         const val EXTRA_OUTPUT_PATH = "output_path"
     }
@@ -42,17 +46,19 @@ class TranscodeService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildNotification("Transcoding video…")
-        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
 
+        val projectId = intent?.getLongExtra(EXTRA_PROJECT_ID, -1L) ?: -1L
         val sourceUri = intent?.getStringExtra(EXTRA_SOURCE_URI)
         val outputPath = intent?.getStringExtra(EXTRA_OUTPUT_PATH)
 
-        if (sourceUri == null || outputPath == null) {
+        if (sourceUri == null || outputPath == null || projectId == -1L) {
             stopSelf()
             return START_NOT_STICKY
         }
 
         serviceScope.launch {
+            val proxyTranscoder = ProxyTranscoder()
             launch {
                 proxyTranscoder.state.collect { state ->
                     val manager = getSystemService(NotificationManager::class.java)
@@ -63,7 +69,14 @@ class TranscodeService : Service() {
                             manager.notify(NOTIFICATION_ID, updateNotification)
                         }
                         is ProxyTranscoder.TranscodeState.Complete -> {
-                            stopSelf()
+                            // Update project in DB with the new proxyUri
+                            launch {
+                                val project = projectRepository.getById(projectId)
+                                if (project != null) {
+                                    projectRepository.update(project.copy(proxyUri = outputPath))
+                                }
+                                stopSelf()
+                            }
                         }
                         is ProxyTranscoder.TranscodeState.Error -> {
                             stopSelf()
@@ -80,7 +93,7 @@ class TranscodeService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        proxyTranscoder.cancel()
+        serviceScope.cancel()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

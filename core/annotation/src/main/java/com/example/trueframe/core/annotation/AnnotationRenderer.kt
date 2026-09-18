@@ -72,6 +72,33 @@ fun AnnotationShape.toPixelSpace(w: Float, h: Float): AnnotationShape = when (th
     is AnnotationShape.Circle -> AnnotationShape.Circle(center.toPixel(w, h), radius * w)
 }
 
+fun Offset.rotateNorm(degrees: Int): Offset {
+    return when ((degrees % 360 + 360) % 360) {
+        90 -> Offset(1f - y, x)
+        180 -> Offset(1f - x, 1f - y)
+        270 -> Offset(y, 1f - x)
+        else -> this
+    }
+}
+
+fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
+    val normDegrees = (degrees % 360 + 360) % 360
+    if (normDegrees == 0) return this
+    
+    return when (this) {
+        is AnnotationShape.Line -> AnnotationShape.Line(start.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
+        is AnnotationShape.Angle -> AnnotationShape.Angle(start.rotateNorm(normDegrees), center.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
+        is AnnotationShape.Circle -> {
+            val newRadius = if (normDegrees == 90 || normDegrees == 270) {
+                radius / aspect // aspect is original width / height
+            } else {
+                radius
+            }
+            AnnotationShape.Circle(center.rotateNorm(normDegrees), newRadius)
+        }
+    }
+}
+
 private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float = 24f) {
     // Outer white ring
     drawCircle(color = Color.White, radius = radius, center = center)

@@ -24,10 +24,17 @@ class ProxyCacheManager @Inject constructor(
 
         val cachedFiles = cacheDir.listFiles() ?: return@withContext
         val projects = projectDao.getAll()
-        val validProxyUris = projects.mapNotNull { it.proxyUri }.toSet()
+        val validProjectIds = projects.map { it.id }.toSet()
 
         for (file in cachedFiles) {
-            if (file.absolutePath !in validProxyUris) {
+            val name = file.name
+            if (name.startsWith("proxy_") && name.endsWith(".mp4")) {
+                val projectIdStr = name.removePrefix("proxy_").removeSuffix(".mp4")
+                val projectId = projectIdStr.toLongOrNull()
+                if (projectId == null || projectId !in validProjectIds) {
+                    file.delete()
+                }
+            } else {
                 file.delete()
             }
         }
@@ -48,6 +55,6 @@ class ProxyCacheManager @Inject constructor(
      * Generates a new file path for a proxy video.
      */
     fun generateProxyPath(projectId: Long): String {
-        return File(getCacheDir(), "proxy_$projectId.mp4").absolutePath
+        return "file://" + File(getCacheDir(), "proxy_$projectId.mp4").absolutePath
     }
 }

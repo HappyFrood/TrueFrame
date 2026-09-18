@@ -127,6 +127,7 @@ class MainScreenViewModel @Inject constructor(
             val proxyPath = proxyCacheManager.generateProxyPath(projectId)
             
             val intent = Intent(context, TranscodeService::class.java).apply {
+                putExtra(TranscodeService.EXTRA_PROJECT_ID, projectId)
                 putExtra(TranscodeService.EXTRA_SOURCE_URI, durableUri)
                 putExtra(TranscodeService.EXTRA_OUTPUT_PATH, proxyPath)
             }
