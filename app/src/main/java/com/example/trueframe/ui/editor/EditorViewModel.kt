@@ -138,6 +138,17 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun renameProject(newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        _uiState.update { it.copy(projectName = trimmed) }
+        viewModelScope.launch {
+            projectRepository.getById(projectId)?.let {
+                projectRepository.update(it.copy(name = trimmed, updatedAt = System.currentTimeMillis()))
+            }
+        }
+    }
+
     fun selectAnnotation(index: Int?) {
         _uiState.update { it.copy(selectedAnnotationIndex = index) }
     }

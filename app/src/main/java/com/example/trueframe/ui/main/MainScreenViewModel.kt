@@ -133,6 +133,14 @@ class MainScreenViewModel @Inject constructor(
         }
     }
     
+    fun renameProject(project: ProjectEntity, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            projectRepository.update(project.copy(name = trimmed, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
     fun deleteProject(project: ProjectEntity) {
         viewModelScope.launch {
             projectRepository.delete(project)

@@ -1,17 +1,14 @@
 # TrueFrame — Android App Specification
 
-**Version:** 0.3
-**Date:** 2026-08-16
-**Status:** Approved for implementation
-**Changes from 0.2:** App renamed to TrueFrame. Min SDK bumped to 33. Transcode pipeline now uses an OpenGL surface to bake in rotation. Added Foreground Service to prevent OS killing transcode. Audio playback added. Tagging added to data model. Removed length measurements and Z-ordering for v1. Added minimum touch targets for annotations and cache reconciliation on startup.
+**Version:** 0.3.5
+**Date:** 2026-09-18
+**Status:** Approved & Implemented
 
 ---
 
 ## 1. Product summary
 
-An offline Android app for coaches and athletes to open a video from the device gallery, step through it frame by frame, and draw measurement annotations (lines, angles, circles) on top of the picture. Supports normal-speed playback and slow-motion review of high-frame-rate footage (60/120/240 fps).
-
-**Non-goals for v1:** cloud sync, accounts, side-by-side dual video comparison, video trimming, annotated video export (v2).
+An offline Android app for coaches and athletes to open a video from the device gallery, step through it frame by frame, and draw measurement annotations (lines, angles, circles) on top of the video. Supports high-frame-rate sports footage (60/120/240 fps).
 
 ---
 
@@ -19,20 +16,22 @@ An offline Android app for coaches and athletes to open a video from the device 
 
 | Item | Choice | Rationale |
 |---|---|---|
-| Language | Kotlin 2.x | |
-| Min SDK | **33 (Android 13)** | Targets devices ≤3 years old. Stable MediaStore, `READ_MEDIA_VIDEO`. |
-| Target SDK | 36 | Play Store requirement |
-| UI | Jetpack Compose + Material 3 | Custom `Canvas` overlay is the core UI |
-| Video | **MediaCodec + OpenGL + MediaMuxer**, **MediaCodec** | No ExoPlayer dependency. OpenGL bakes rotation. |
+| Language | Kotlin 2.2 | |
+| Min SDK | **33 (Android 13)** | Targets modern Android devices. |
+| Target SDK | 36 | Latest Android SDK |
+| UI | Jetpack Compose + Material 3 | Custom `Canvas` overlay for vector annotations |
+| Navigation | Navigation 3 (`androidx.navigation3`) | |
+| Video | **Media3 ExoPlayer** + **ProxyTranscoder** | Accelerated video playback & proxy generation |
 | Persistence | Room (SQLite) | Projects + annotations + tags |
 | DI | Hilt | |
-| Async | Coroutines + Flow + **Foreground Service** | Guaranteed transcode execution |
+| Async | Coroutines + Flow + **Foreground Service** | Reliable background transcoding |
 
 ### Module layout
 
 ```text
-:app                 // Activity, navigation, screens, DI wiring, Foreground Services
-:core:video          // ProxyTranscoder, ProxyReader, FrameIndex, PlaybackClock, AudioExtractor
+:app                 // Activity, Navigation 3, screens, ViewModels, TranscodeService
+:core:video          // ProxyTranscoder, TranscodeBus, FrameMath
 :core:annotation     // Shape models, geometry/measurement math, renderer, hit-testing
-:core:designsystem   // Theme, tokens, reusable composables
+:core:designsystem   // Theme, tokens, Material 3 styling
 :data                // Room entities/DAOs, repositories, proxy cache manager, JSON I/O
+```

@@ -4,6 +4,7 @@
 package com.example.trueframe.ui.editor
 
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.LinearScale
@@ -37,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -112,6 +115,9 @@ fun EditorScreen(
     var isPlaying by remember { mutableStateOf(false) }
     var isScrubbing by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
+
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameInputText by remember { mutableStateOf("") }
 
     var videoW by remember { mutableIntStateOf(0) }
     var videoH by remember { mutableIntStateOf(0) }
@@ -203,24 +209,71 @@ fun EditorScreen(
         viewModel.updatePlayerState(currentPositionMs, totalDurationMs, isPlaying, frameRate)
     }
 
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Rename Project") },
+            text = {
+                OutlinedTextField(
+                    value = renameInputText,
+                    onValueChange = { renameInputText = it },
+                    singleLine = true,
+                    label = { Text("Project Name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.renameProject(renameInputText)
+                        showRenameDialog = false
+                    }
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(uiState.projectName.ifEmpty { "Project $projectId" }, style = MaterialTheme.typography.titleMedium)
-                        val seconds = currentPositionMs / 1000f
-                        val selectedItem = uiState.selectedAnnotationIndex?.let { uiState.annotations.getOrNull(it) }
-                        val subtitleText = if (selectedItem != null) {
-                            String.format(Locale.US, "Frame %d (%.2fs) · selected: drawn on frame %d", currentFrameIdx, seconds, selectedItem.frameIndex)
-                        } else {
-                            String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable {
+                            renameInputText = uiState.projectName.ifEmpty { "Project $projectId" }
+                            showRenameDialog = true
                         }
-                        Text(
-                            text = subtitleText,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                    ) {
+                        Column {
+                            Text(uiState.projectName.ifEmpty { "Project $projectId" }, style = MaterialTheme.typography.titleMedium)
+                            val seconds = currentPositionMs / 1000f
+                            val selectedItem = uiState.selectedAnnotationIndex?.let { uiState.annotations.getOrNull(it) }
+                            val subtitleText = if (selectedItem != null) {
+                                String.format(Locale.US, "Frame %d (%.2fs) · selected: drawn on frame %d", currentFrameIdx, seconds, selectedItem.frameIndex)
+                            } else {
+                                String.format(Locale.US, "Frame %d (%.2fs)", currentFrameIdx, seconds)
+                            }
+                            Text(
+                                text = subtitleText,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                renameInputText = uiState.projectName.ifEmpty { "Project $projectId" }
+                                showRenameDialog = true
+                            }
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit Project Name", modifier = Modifier.size(18.dp))
+                        }
                     }
                 },
                 navigationIcon = {
@@ -241,7 +294,7 @@ fun EditorScreen(
                 shadowElevation = 8.dp,
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 12.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 20.dp)) {
                     // ================= ROW 1: FILMSTRIP & SCRUBBING CONTROL =================
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
