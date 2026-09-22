@@ -1,5 +1,11 @@
 package com.example.trueframe
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
@@ -18,6 +24,26 @@ fun MainNavigation() {
   NavDisplay(
     backStack = backStack,
     onBack = { backStack.removeLastOrNull() },
+    transitionSpec = {
+      slideInHorizontally(
+        initialOffsetX = { it },
+        animationSpec = tween(300)
+      ) + fadeIn(animationSpec = tween(300)) togetherWith
+        slideOutHorizontally(
+          targetOffsetX = { -it },
+          animationSpec = tween(300)
+        ) + fadeOut(animationSpec = tween(300))
+    },
+    popTransitionSpec = {
+      slideInHorizontally(
+        initialOffsetX = { -it },
+        animationSpec = tween(300)
+      ) + fadeIn(animationSpec = tween(300)) togetherWith
+        slideOutHorizontally(
+          targetOffsetX = { it },
+          animationSpec = tween(300)
+        ) + fadeOut(animationSpec = tween(300))
+    },
     entryProvider =
       entryProvider {
         entry<Main> {
