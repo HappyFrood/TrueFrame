@@ -11,6 +11,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import com.example.trueframe.core.annotation.AnnotationColors
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.rotateNorm
@@ -77,7 +78,7 @@ object FrameExporter {
         var bitmap: Bitmap? = null
         try {
             if (videoUri.startsWith("content://")) {
-                retriever.setDataSource(context, Uri.parse(videoUri))
+                retriever.setDataSource(context, videoUri.toUri())
             } else {
                 retriever.setDataSource(videoUri)
             }

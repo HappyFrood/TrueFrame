@@ -70,7 +70,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -463,14 +462,14 @@ fun EditorScreen(
                             Icon(
                                 Icons.Default.SquareFoot,
                                 contentDescription = "Add Angle",
-                                tint = com.example.trueframe.core.annotation.AnnotationColors.Angle
+                                tint = AnnotationColors.Angle
                             )
                         }
                         IconButton(onClick = { viewModel.addCircle() }) {
                             Icon(
                                 Icons.Default.Adjust,
                                 contentDescription = "Add Circle",
-                                tint = com.example.trueframe.core.annotation.AnnotationColors.Circle
+                                tint = AnnotationColors.Circle
                             )
                         }
 

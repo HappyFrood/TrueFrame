@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.trueframe.core.video.TranscodeBus
@@ -41,7 +42,7 @@ data class ProjectMeta(
 
 @HiltViewModel
 class MainScreenViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val projectRepository: ProjectRepository,
     private val proxyCacheManager: ProxyCacheManager,
     private val transcodeBus: TranscodeBus,
@@ -53,6 +54,7 @@ class MainScreenViewModel @Inject constructor(
     val transcodeProgress: StateFlow<Map<Long, Float>> = transcodeBus.progress
 
     private val _activeTranscodeProjectId = MutableStateFlow<Long?>(null)
+    @Suppress("unused")
     val activeTranscodeProjectId: StateFlow<Long?> = _activeTranscodeProjectId.asStateFlow()
 
     private val _projectMetaMap = MutableStateFlow<Map<Long, ProjectMeta>>(emptyMap())
@@ -101,7 +103,7 @@ class MainScreenViewModel @Inject constructor(
 
                 try {
                     if (videoUri.startsWith("content://")) {
-                        retriever.setDataSource(context, Uri.parse(videoUri))
+                        retriever.setDataSource(context, videoUri.toUri())
                     } else {
                         retriever.setDataSource(videoUri)
                     }
@@ -153,7 +155,7 @@ class MainScreenViewModel @Inject constructor(
 
     fun addProject(videoUri: String) {
         viewModelScope.launch {
-            val sourceUri = Uri.parse(videoUri)
+            val sourceUri = videoUri.toUri()
 
             // 1. Read metadata on Dispatchers.IO BEFORE copying file to prevent leaking multi-GB rejected files
             val isTooLong = withContext(Dispatchers.IO) {
