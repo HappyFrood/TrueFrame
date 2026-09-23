@@ -2,9 +2,9 @@
 
 An offline Android app for coaches, athletes, and video analysts. Open a video from the device gallery, step through it frame by frame, and draw measurement annotations — lines, angles, circles — directly on the picture. Built for high-frame-rate sports footage (60 / 120 / 240 fps).
 
-**Status:** `v3.5`.
+**Status:** `v3.6`.
 
-**Non-goals for v1:** cloud sync, accounts, side-by-side comparison, trimming, annotated video export.
+**Non-goals for v1:** cloud sync, accounts, side-by-side comparison, trimming.
 
 ---
 
@@ -15,7 +15,7 @@ An offline Android app for coaches, athletes, and video analysts. Open a video f
 - [Core design contracts](#core-design-contracts)
 - [Data model](#data-model)
 - [Video pipeline](#video-pipeline)
-- [Annotation system](#annotation-system)
+- [Annotation system & Frame Sharing](#annotation-system--frame-sharing)
 - [Threading & lifecycle rules](#threading--lifecycle-rules)
 - [Tech stack](#tech-stack)
 - [Getting started](#getting-started)
@@ -54,6 +54,7 @@ Clean layering, unidirectional data flow, single source of truth per screen.
 **Rules:**
 
 - ViewModels own all state. Composables are pure functions of `UiState` plus event callbacks — no business logic or unmanaged side effects in composable bodies.
+- Navigation 3 includes `rememberViewModelStoreNavEntryDecorator` and `rememberSaveableStateHolderNavEntryDecorator` to scope ViewModels and saved state per entry.
 - `:core:*` modules are Android-library-only and know nothing about the app or each other.
 - `:data` depends on `:core:annotation` (for shape types in JSON I/O) and exposes it via `api`.
 - Media3 ExoPlayer is the single playback engine.
@@ -64,7 +65,7 @@ Clean layering, unidirectional data flow, single source of truth per screen.
 
 ```text
 :app                 Activity, Navigation 3, screens, ViewModels, DI wiring,
-                     TranscodeService (foreground service)
+                     TranscodeService (foreground service), FrameExporter
 :core:video          ProxyTranscoder, TranscodeBus, FrameMath — no Compose, no app types
 :core:annotation     Shape models, geometry/measurement math, Canvas renderer,
                      hit-testing. Pure geometry, fully unit-testable.
@@ -132,13 +133,15 @@ AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)
 
 Videos imported via the photo picker are copied into durable app storage (`noBackupFilesDir`). `TranscodeService` runs as a foreground service, using `ProxyTranscoder` to generate a proxy video.
 
-### Playback
+### Playback & Rotation
 
-`EditorScreen` renders video using Media3 ExoPlayer with hardware acceleration. Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping, and rotation.
+`EditorScreen` renders video using Media3 ExoPlayer attached to a `TextureView` with `graphicsLayer` Z-rotation and `requiredSize` aspect bounds. Content is clipped via `clipToBounds()` and rotates seamlessly without aspect squashing.
+
+Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping on release, and frame snapping on pause.
 
 ---
 
-## Annotation system
+## Annotation system & Frame Sharing
 
 ### Shapes
 
@@ -148,11 +151,12 @@ Videos imported via the photo picker are copied into durable app storage (`noBac
 | 📐 Angle | vertex + two rays | interior angle (`0–180°`) |
 | ⭕ Circle | center + radius | radial readout (`r: X px`) |
 
-### Interaction
+### Interaction & Export
 
 - **Tap selection** — tapping a shape selects it.
 - **Handles & readouts** — interactive handles and measurement readouts appear on the active selected annotation when paused, and automatically hide during playback, scrubbing, or when tapping empty space.
 - **Golden-angle spawn** — new shapes spawn in a non-repeating golden-angle spiral (`spawnCounter++`) and are clamped inside `0.05..0.95` normalized bounds.
+- **Frame Sharing** — `FrameExporter` renders the exact displayed video frame and its vector annotations overlay into a JPEG image, which is shared using `FileProvider` and the Android system share sheet.
 
 ---
 

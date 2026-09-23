@@ -3,6 +3,7 @@
 
 package com.example.trueframe.ui.editor
 
+import android.content.Intent
 import android.net.Uri
 import android.view.TextureView
 import androidx.compose.foundation.clickable
@@ -61,6 +62,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -94,6 +96,7 @@ import com.example.trueframe.core.annotation.toPixelSpace
 import com.example.trueframe.core.video.FrameMath
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlin.OptIn
 import java.util.Locale
 import kotlin.math.hypot
@@ -228,6 +231,7 @@ fun EditorScreen(
         viewModel.updatePlayerState(currentPositionMs, totalDurationMs, isPlaying, frameRate)
     }
 
+    val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(uiState.error) {
         val err = uiState.error
@@ -426,7 +430,21 @@ fun EditorScreen(
                             Icon(Icons.Default.RadioButtonUnchecked, contentDescription = "Add Circle")
                         }
 
-                        IconButton(onClick = { viewModel.shareCurrentFrame(context) }) {
+                        IconButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val uri = viewModel.exportFrameUri(context)
+                                    if (uri != null) {
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "image/jpeg"
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, "Share Annotated Frame"))
+                                    }
+                                }
+                            }
+                        ) {
                             Icon(Icons.Default.Share, contentDescription = "Share Frame")
                         }
 

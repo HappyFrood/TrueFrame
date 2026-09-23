@@ -1,7 +1,6 @@
 package com.example.trueframe.ui.editor
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.ViewModel
@@ -309,31 +308,23 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(error = null) }
     }
 
-    fun shareCurrentFrame(context: Context) {
+    suspend fun exportFrameUri(context: Context): Uri? {
         val s = _uiState.value
-        val videoUri = s.videoUri ?: return
+        val videoUri = s.videoUri ?: return null
         val timeUs = FrameMath.msForFrame(s.frameIndex, s.frameRate) * 1000L
         val rotation = s.rotationDegrees
         val shapes = s.annotations.map { it.shape }
 
-        viewModelScope.launch {
-            val uri = FrameExporter.exportAndShareFrame(
-                context = context,
-                videoUri = videoUri,
-                timeUs = timeUs,
-                rotationDegrees = rotation,
-                annotations = shapes,
-            )
-            if (uri != null) {
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "image/jpeg"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                context.startActivity(Intent.createChooser(intent, "Share Annotated Frame"))
-            } else {
-                _uiState.update { it.copy(error = "Failed to export frame") }
-            }
+        val uri = FrameExporter.exportAndShareFrame(
+            context = context.applicationContext,
+            videoUri = videoUri,
+            timeUs = timeUs,
+            rotationDegrees = rotation,
+            annotations = shapes,
+        )
+        if (uri == null) {
+            _uiState.update { it.copy(error = "Failed to export frame") }
         }
+        return uri
     }
 }

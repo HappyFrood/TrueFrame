@@ -141,8 +141,14 @@ object FrameExporter {
                 }
             }
 
-            // Save to shared_images directory
+            // Save to shared_images directory (cleaning files older than 1 hour)
             val sharedDir = File(context.cacheDir, "shared_images").apply { if (!exists()) mkdirs() }
+            val oneHourAgo = System.currentTimeMillis() - 3600_000L
+            sharedDir.listFiles()?.forEach { file ->
+                if (file.lastModified() < oneHourAgo) {
+                    runCatching { file.delete() }
+                }
+            }
             val imageFile = File(sharedDir, "trueframe_${System.currentTimeMillis()}.jpg")
             FileOutputStream(imageFile).use { out ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
