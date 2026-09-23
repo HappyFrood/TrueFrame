@@ -12,12 +12,11 @@ class FrameExporterTest {
         assertFalse(FrameExporter.needsMetaRotation(1920, 1080, 0, 1920, 1080))
         assertFalse(FrameExporter.needsMetaRotation(1920, 1080, 180, 1920, 1080))
 
-        // Metadata 90 on portrait phone video (metaW=1080, metaH=1920 -> dispW=1920, dispH=1080)
-        // If retriever already returned display-oriented bitmap (1920x1080), rawBitmap.width > rawBitmap.height matches dispW > dispH -> false
-        assertFalse(FrameExporter.needsMetaRotation(1920, 1080, 90, 1080, 1920))
-
-        // If retriever returned raw un-rotated bitmap (1080x1920), rawBitmap width < height disagrees with dispW > dispH -> true
-        assertTrue(FrameExporter.needsMetaRotation(1080, 1920, 90, 1080, 1920))
+        // Real-world portrait phone clip (stored as 1920x1080 with rotation 90)
+        // Already rotated by platform JNI -> rawBitmap is 1080x1920 -> false
+        assertFalse(FrameExporter.needsMetaRotation(1080, 1920, 90, 1920, 1080))
+        // Raw bitmap un-rotated (1920x1080) -> needs rotation -> true
+        assertTrue(FrameExporter.needsMetaRotation(1920, 1080, 90, 1920, 1080))
 
         // Square frame -> false
         assertFalse(FrameExporter.needsMetaRotation(1000, 1000, 90, 1000, 1000))

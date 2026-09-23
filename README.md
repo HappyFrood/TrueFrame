@@ -2,7 +2,7 @@
 
 An offline Android app for coaches, athletes, and video analysts. Open a video from the device gallery, step through it frame by frame, and draw measurement annotations — lines, angles, circles — directly on the picture. Built for high-frame-rate sports footage (60 / 120 / 240 fps).
 
-**Status:** `v3.6`.
+**Status:** `v3.7`.
 
 **Non-goals for v1:** cloud sync, accounts, side-by-side comparison, trimming.
 
@@ -110,11 +110,11 @@ Annotation writes update Room on `onDragEnd` via `@Update`, preserving row IDs a
 
 ## Data model
 
-```kotlin
+```text
 @Entity("projects")
-ProjectEntity(id, name, videoUri, proxyUri?, transcodeState, rotationDegrees, createdAt, updatedAt)
+ProjectEntity(id, name, videoUri, proxyUri, transcodeState, rotationDegrees, createdAt, updatedAt)
 
-@Entity("annotations", FK → projects CASCADE, index(projectId, frameIndex))
+@Entity("annotations", FK -> projects CASCADE, index(projectId, frameIndex))
 AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)
 
 @Entity("tags")             TagEntity(id, name)
@@ -137,7 +137,7 @@ Videos imported via the photo picker are copied into durable app storage (`noBac
 
 `EditorScreen` renders video using Media3 ExoPlayer attached to a `TextureView` with `graphicsLayer` Z-rotation and `requiredSize` aspect bounds. Content is clipped via `clipToBounds()` and rotates seamlessly without aspect squashing.
 
-Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping on release, and frame snapping on pause.
+Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping on release, and guarded frame snapping on user pause.
 
 ---
 
@@ -157,6 +157,16 @@ Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with
 - **Handles & readouts** — interactive handles and measurement readouts appear on the active selected annotation when paused, and automatically hide during playback, scrubbing, or when tapping empty space.
 - **Golden-angle spawn** — new shapes spawn in a non-repeating golden-angle spiral (`spawnCounter++`) and are clamped inside `0.05..0.95` normalized bounds.
 - **Frame Sharing** — `FrameExporter` renders the exact displayed video frame and its vector annotations overlay into a JPEG image, which is shared using `FileProvider` and the Android system share sheet.
+
+---
+
+## Threading & lifecycle rules
+
+- **No media I/O on the main thread.** `viewModelScope.launch` defaults to `Dispatchers.Main.immediate`; `MediaMetadataRetriever` calls must be wrapped in `withContext(Dispatchers.IO)`.
+- **No side effects in composable bodies.** ViewModel initialization goes in `LaunchedEffect(key)`.
+- **No permanent polling loops.** Position polling runs only while playing and stops when not resumed.
+- **Interop views don't eat touches.** `TextureView` is configured so annotation gesture handlers layer directly above it.
+- **Every scope gets cancelled.** `TranscodeService.serviceScope` is cancelled in `onDestroy`.
 
 ---
 

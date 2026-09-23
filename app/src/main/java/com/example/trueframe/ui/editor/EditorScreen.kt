@@ -1,5 +1,5 @@
 @file:Suppress("UnsafeOptInUsageError")
-@file:OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.example.trueframe.ui.editor
 
@@ -25,7 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.RotateRight
-import androidx.compose.material.icons.filled.Architecture
+import androidx.compose.material.icons.filled.Adjust
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
@@ -33,11 +33,11 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
-import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SquareFoot
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -70,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -77,14 +78,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import com.example.trueframe.core.annotation.AnnotationOverlay
@@ -97,11 +94,11 @@ import com.example.trueframe.core.video.FrameMath
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.OptIn
+import kotlin.time.Duration.Companion.milliseconds
 import java.util.Locale
 import kotlin.math.hypot
 
-@OptIn(ExperimentalMaterial3Api::class, UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(
     projectId: Long,
@@ -162,22 +159,15 @@ fun EditorScreen(
         val player = exoPlayer ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(size: VideoSize) {
-                // Note: unappliedRotationDegrees is dead code on API 21+ (Media3 lets the codec apply rotation and reports display-oriented size with unappliedRotationDegrees == 0).
-                val rot = size.unappliedRotationDegrees
-                if (rot == 90 || rot == 270) {
-                    videoW = size.height
-                    videoH = size.width
-                } else {
-                    videoW = size.width
-                    videoH = size.height
-                }
+                videoW = size.width
+                videoH = size.height
                 pixelRatio = if (size.pixelWidthHeightRatio > 0f) size.pixelWidthHeightRatio else 1f
             }
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
                 if (playing) {
                     viewModel.selectAnnotation(null)
-                } else {
+                } else if (!player.playWhenReady && player.playbackState != Player.STATE_ENDED) {
                     val idx = FrameMath.frameForMs(player.currentPosition, frameRate)
                     val snapped = FrameMath.msForFrame(idx, frameRate).coerceIn(0L, totalDurationMs.coerceAtLeast(0L))
                     player.setSeekParameters(SeekParameters.EXACT)
@@ -208,22 +198,13 @@ fun EditorScreen(
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) exoPlayer?.pause()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
     // Poll ONLY while playing — required by the "no permanent polling loops" rule.
     LaunchedEffect(exoPlayer, isPlaying) {
         val player = exoPlayer ?: return@LaunchedEffect
         if (!isPlaying) return@LaunchedEffect
         while (isActive) {
             if (!isScrubbing) currentPositionMs = player.currentPosition
-            delay(16L)
+            delay(16.milliseconds)
         }
     }
 
@@ -233,11 +214,11 @@ fun EditorScreen(
 
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiState.error) {
-        val err = uiState.error
-        if (err != null) {
-            snackbarHostState.showSnackbar(err)
-            viewModel.clearError()
+    LaunchedEffect(uiState.userMessage) {
+        val msg = uiState.userMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearUserMessage()
         }
     }
 
@@ -327,9 +308,13 @@ fun EditorScreen(
                 shadowElevation = 8.dp,
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 20.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 16.dp)) {
                     // ================= ROW 1: FILMSTRIP & SCRUBBING CONTROL =================
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -347,6 +332,8 @@ fun EditorScreen(
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         if (totalDurationMs > 0) {
                             Slider(
@@ -366,7 +353,6 @@ fun EditorScreen(
                                 onValueChangeFinished = {
                                     val player = exoPlayer ?: return@Slider
                                     player.setSeekParameters(SeekParameters.EXACT)
-                                    // Land dead-centre on a frame rather than between two.
                                     val snapped = FrameMath.msForFrame(
                                         FrameMath.frameForMs(scrubPositionMs, frameRate), frameRate
                                     ).coerceIn(0L, totalDurationMs)
@@ -375,40 +361,71 @@ fun EditorScreen(
                                     isScrubbing = false
                                 },
                                 valueRange = 0f..totalDurationMs.toFloat().coerceAtLeast(1f),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp)
                             )
                         }
+                    }
 
-                        // Transport Controls
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                    // Transport Controls (50% larger icons & touch targets)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { seekToFrame(-10) },
+                            modifier = Modifier.size(60.dp)
                         ) {
-                            IconButton(onClick = { seekToFrame(-10) }) {
-                                Icon(Icons.Default.FastRewind, contentDescription = "-10 Frames")
-                            }
-                            IconButton(onClick = { seekToFrame(-1) }) {
-                                Icon(Icons.Default.ChevronLeft, contentDescription = "-1 Frame")
-                            }
-                            IconButton(
-                                onClick = {
-                                    val player = exoPlayer ?: return@IconButton
-                                    if (player.isPlaying) player.pause() else player.play()
-                                },
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = "Play/Pause"
-                                )
-                            }
-                            IconButton(onClick = { seekToFrame(+1) }) {
-                                Icon(Icons.Default.ChevronRight, contentDescription = "+1 Frame")
-                            }
-                            IconButton(onClick = { seekToFrame(+10) }) {
-                                Icon(Icons.Default.FastForward, contentDescription = "+10 Frames")
-                            }
+                            Icon(
+                                imageVector = Icons.Default.FastRewind,
+                                contentDescription = "-10 Frames",
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { seekToFrame(-1) },
+                            modifier = Modifier.size(60.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronLeft,
+                                contentDescription = "-1 Frame",
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                val player = exoPlayer ?: return@IconButton
+                                if (player.isPlaying) player.pause() else player.play()
+                            },
+                            modifier = Modifier.padding(horizontal = 4.dp).size(60.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { seekToFrame(+1) },
+                            modifier = Modifier.size(60.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = "+1 Frame",
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { seekToFrame(+10) },
+                            modifier = Modifier.size(60.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FastForward,
+                                contentDescription = "+10 Frames",
+                                modifier = Modifier.size(36.dp)
+                            )
                         }
                     }
 
@@ -421,13 +438,25 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = { viewModel.addLine() }) {
-                            Icon(Icons.Default.LinearScale, contentDescription = "Add Line")
+                            Icon(
+                                Icons.Default.Straighten,
+                                contentDescription = "Add Line",
+                                tint = Color(0xFFFF9E80) // Subtle warm line tint
+                            )
                         }
                         IconButton(onClick = { viewModel.addAngle() }) {
-                            Icon(Icons.Default.Architecture, contentDescription = "Add Angle")
+                            Icon(
+                                Icons.Default.SquareFoot,
+                                contentDescription = "Add Angle",
+                                tint = Color(0xFFB9F6CA) // Subtle mint angle tint
+                            )
                         }
                         IconButton(onClick = { viewModel.addCircle() }) {
-                            Icon(Icons.Default.RadioButtonUnchecked, contentDescription = "Add Circle")
+                            Icon(
+                                Icons.Default.Adjust,
+                                contentDescription = "Add Circle",
+                                tint = Color(0xFF82B1FF) // Subtle sky blue circle tint
+                            )
                         }
 
                         IconButton(
@@ -445,7 +474,11 @@ fun EditorScreen(
                                 }
                             }
                         ) {
-                            Icon(Icons.Default.Share, contentDescription = "Share Frame")
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = "Share Frame",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         if (uiState.selectedAnnotationIndex != null) {
@@ -453,7 +486,7 @@ fun EditorScreen(
                                 Icon(
                                     Icons.Default.Delete,
                                     contentDescription = "Delete Annotation",
-                                    tint = MaterialTheme.colorScheme.error
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
                                 )
                             }
                         }
@@ -477,7 +510,11 @@ fun EditorScreen(
 
                         if (uiState.annotations.isNotEmpty()) {
                             IconButton(onClick = { showClearConfirm = true }) {
-                                Icon(Icons.Default.DeleteSweep, contentDescription = "Clear All")
+                                Icon(
+                                    Icons.Default.DeleteSweep,
+                                    contentDescription = "Clear All",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
                             }
                         }
                     }
@@ -517,7 +554,6 @@ fun EditorScreen(
 
                 val vw = fittedWidthDp.value * density
                 val vh = fittedHeightDp.value * density
-                val aspectCorrection = vh / vw
 
                 val viewWidthDp = if (isSideways) fittedHeightDp else fittedWidthDp
                 val viewHeightDp = if (isSideways) fittedWidthDp else fittedHeightDp
@@ -599,8 +635,8 @@ fun EditorScreen(
                         }
                     } else {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            if (uiState.error != null) {
-                                Text("Error: ${uiState.error}")
+                            if (uiState.loadError != null) {
+                                Text("Error: ${uiState.loadError}")
                             } else {
                                 Text("Loading video...")
                             }
@@ -623,49 +659,39 @@ fun EditorScreen(
     }
 }
 
-/**
- * Finds the closest control point handle within [thresholdPx] pixels.
- */
-private fun findHitHandle(
-    shapes: List<AnnotationShape>,
+fun findHitHandle(
+    pixelShapes: List<AnnotationShape>,
     touch: Offset,
-    thresholdPx: Float,
+    slopPx: Float,
 ): Pair<Int, Int>? {
-    var best: Pair<Int, Int>? = null
-    var bestDist = Float.MAX_VALUE
-    shapes.forEachIndexed { shapeIndex, shape ->
+    pixelShapes.forEachIndexed { shapeIdx, shape ->
         val handles = when (shape) {
             is AnnotationShape.Line -> listOf(shape.start, shape.end)
             is AnnotationShape.Angle -> listOf(shape.start, shape.center, shape.end)
             is AnnotationShape.Circle -> listOf(shape.center, shape.center + Offset(shape.radius, 0f))
         }
-        handles.forEachIndexed { handleIndex, handleOffset ->
-            val dist = hypot(
-                (touch.x - handleOffset.x).toDouble(),
-                (touch.y - handleOffset.y).toDouble(),
-            ).toFloat()
-            if (dist <= thresholdPx && dist < bestDist) {
-                bestDist = dist
-                best = shapeIndex to handleIndex
+        handles.forEachIndexed { handleIdx, handlePos ->
+            if (hypot((touch.x - handlePos.x).toDouble(), (touch.y - handlePos.y).toDouble()) <= slopPx) {
+                return Pair(shapeIdx, handleIdx)
             }
         }
     }
-    return best
+    return null
 }
 
-private fun findHitShape(
-    shapes: List<AnnotationShape>,
+fun findHitShape(
+    pixelShapes: List<AnnotationShape>,
     touch: Offset,
-    thresholdPx: Float,
+    slopPx: Float,
 ): Int? {
-    var best: Int? = null
-    var bestDist = Float.MAX_VALUE
-    shapes.forEachIndexed { index, shape ->
-        val d = HitTesting.distanceTo(shape, touch)
-        if (d <= thresholdPx && d < bestDist) {
-            bestDist = d
-            best = index
+    var minDistance = Float.MAX_VALUE
+    var bestIndex: Int? = null
+    pixelShapes.forEachIndexed { index, shape ->
+        val dist = HitTesting.distanceTo(shape, touch)
+        if (dist <= slopPx && dist < minDistance) {
+            minDistance = dist
+            bestIndex = index
         }
     }
-    return best
+    return bestIndex
 }

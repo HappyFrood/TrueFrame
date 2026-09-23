@@ -38,8 +38,10 @@ data class EditorUiState(
     val rotationDegrees: Int = 0,
     val annotations: List<AnnotationItem> = emptyList(),
     val selectedAnnotationIndex: Int? = null,
-    val error: String? = null,
+    val loadError: String? = null,
+    val userMessage: String? = null,
 ) {
+    @Suppress("unused")
     val frameIntervalMs: Float get() = FrameMath.intervalMs(frameRate)
 }
 
@@ -92,7 +94,7 @@ class EditorViewModel @Inject constructor(
                     )
                 }
             } else {
-                _uiState.update { it.copy(error = "Project not found") }
+                _uiState.update { it.copy(loadError = "Project not found") }
             }
         }
 
@@ -304,8 +306,8 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun clearError() {
-        _uiState.update { it.copy(error = null) }
+    fun clearUserMessage() {
+        _uiState.update { it.copy(userMessage = null) }
     }
 
     suspend fun exportFrameUri(context: Context): Uri? {
@@ -323,7 +325,7 @@ class EditorViewModel @Inject constructor(
             annotations = shapes,
         )
         if (uri == null) {
-            _uiState.update { it.copy(error = "Failed to export frame") }
+            _uiState.update { it.copy(userMessage = "Failed to export frame") }
         }
         return uri
     }
