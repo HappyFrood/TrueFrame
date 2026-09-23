@@ -11,6 +11,7 @@ object AnnotationColors {
     val Line = Color(0xFFFF6D00)     // Orange for lines
     val Angle = Color(0xFF00E676)    // Green for angles
     val Circle = Color(0xFF448AFF)   // Blue for circles
+    @Suppress("unused")
     val Selected = Color(0xFFFFEB3B) // Yellow for selected shape
 }
 
@@ -56,12 +57,10 @@ sealed interface AnnotationShape {
 /**
  * Hit-testing utilities for annotation shapes.
  * Spec: "hit-testing"
- *
- * [touchSlop] is the minimum touch-target distance in pixels.
- * Spec: "Added minimum touch targets for annotations."
  */
 object HitTesting {
     /** Minimum touch-target radius in **dp**. Convert at the call site via LocalDensity. */
+    @Suppress("unused")
     const val MIN_TOUCH_TARGET_DP = 24f   // 24dp radius == 48dp target
 
     fun distanceTo(shape: AnnotationShape, point: Offset): Float = when (shape) {
