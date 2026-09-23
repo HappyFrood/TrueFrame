@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 val TrueFrameDarkBackground = Color(0xFF121316)
 val TrueFrameDarkSurface = Color(0xFF191B1F)
 val TrueFrameDarkSurfaceVariant = Color(0xFF24262C)
+val TrueFrameOnSurfaceDark = Color(0xFFE3E5E8)
 
 val TrueFramePrimaryDark = Color(0xFF82B1FF)
 val TrueFrameOnPrimaryDark = Color(0xFF002A54)
@@ -30,8 +31,8 @@ val TrueFrameOnErrorDark = Color(0xFF640000)
 
 // Annotation overlay colors
 @Suppress("unused")
-val AnnotationLine = Color(0xFFFF6D00)    // Orange for lines
+val AnnotationLine = Color(0xFFFF6D00)
 @Suppress("unused")
-val AnnotationAngle = Color(0xFF00E676)   // Green for angles
+val AnnotationAngle = Color(0xFF00E676)
 @Suppress("unused")
-val AnnotationCircle = Color(0xFF448AFF)  // Blue for circles
+val AnnotationCircle = Color(0xFF448AFF)

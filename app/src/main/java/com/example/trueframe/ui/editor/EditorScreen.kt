@@ -78,12 +78,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import com.example.trueframe.core.annotation.AnnotationColors
 import com.example.trueframe.core.annotation.AnnotationOverlay
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.HitTesting
@@ -196,6 +200,15 @@ fun EditorScreen(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) exoPlayer?.pause()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Poll ONLY while playing — required by the "no permanent polling loops" rule.
@@ -323,13 +336,15 @@ fun EditorScreen(
                             val currentSec = currentPositionMs / 1000f
                             val totalSec = totalDurationMs / 1000f
 
+                            val tabularStyle = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
+
                             Text(
                                 text = String.format(Locale.US, "%.1fs / %.1fs", currentSec, totalSec),
-                                style = MaterialTheme.typography.labelMedium
+                                style = tabularStyle
                             )
                             Text(
-                                text = "Frame $currentFrameIdx",
-                                style = MaterialTheme.typography.labelMedium
+                                text = String.format(Locale.US, "Frame %d · %.0f fps", currentFrameIdx, frameRate),
+                                style = tabularStyle
                             )
                         }
 
@@ -431,7 +446,7 @@ fun EditorScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // ================= ROW 2: ANNOTATION & EDITING TOOLBAR =================
+                    // ================= ROW 2: ANNOTATION & EDITING TOOLBAR (FIXED SLOTS NO JITTER) =================
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -441,21 +456,21 @@ fun EditorScreen(
                             Icon(
                                 Icons.Default.Straighten,
                                 contentDescription = "Add Line",
-                                tint = Color(0xFFFF9E80) // Subtle warm line tint
+                                tint = AnnotationColors.Line
                             )
                         }
                         IconButton(onClick = { viewModel.addAngle() }) {
                             Icon(
                                 Icons.Default.SquareFoot,
                                 contentDescription = "Add Angle",
-                                tint = Color(0xFFB9F6CA) // Subtle mint angle tint
+                                tint = com.example.trueframe.core.annotation.AnnotationColors.Angle
                             )
                         }
                         IconButton(onClick = { viewModel.addCircle() }) {
                             Icon(
                                 Icons.Default.Adjust,
                                 contentDescription = "Add Circle",
-                                tint = Color(0xFF82B1FF) // Subtle sky blue circle tint
+                                tint = com.example.trueframe.core.annotation.AnnotationColors.Circle
                             )
                         }
 
@@ -481,14 +496,28 @@ fun EditorScreen(
                             )
                         }
 
-                        if (uiState.selectedAnnotationIndex != null) {
-                            IconButton(onClick = { viewModel.deleteSelectedAnnotation() }) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Delete Annotation",
-                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                                )
-                            }
+                        val isSelected = (uiState.selectedAnnotationIndex != null)
+                        IconButton(
+                            onClick = { viewModel.deleteSelectedAnnotation() },
+                            enabled = isSelected
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Delete Annotation",
+                                tint = if (isSelected) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+                            )
+                        }
+
+                        val hasAnnotations = uiState.annotations.isNotEmpty()
+                        IconButton(
+                            onClick = { showClearConfirm = true },
+                            enabled = hasAnnotations
+                        ) {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = "Clear All",
+                                tint = if (hasAnnotations) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+                            )
                         }
 
                         if (showClearConfirm) {
@@ -506,16 +535,6 @@ fun EditorScreen(
                                     TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
                                 },
                             )
-                        }
-
-                        if (uiState.annotations.isNotEmpty()) {
-                            IconButton(onClick = { showClearConfirm = true }) {
-                                Icon(
-                                    Icons.Default.DeleteSweep,
-                                    contentDescription = "Clear All",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
                         }
                     }
                 }
@@ -647,6 +666,7 @@ fun EditorScreen(
                     AnnotationOverlay(
                         shapes = uiState.annotations.map { it.shape },
                         selectedIndex = uiState.selectedAnnotationIndex,
+                        activeDragTarget = activeDragTarget,
                         showHandles = (!isPlaying),
                         rotationDegrees = uiState.rotationDegrees,
                         frameAspect = rawWidth / rawHeight,
@@ -659,27 +679,31 @@ fun EditorScreen(
     }
 }
 
-fun findHitHandle(
+private fun findHitHandle(
     pixelShapes: List<AnnotationShape>,
     touch: Offset,
     slopPx: Float,
 ): Pair<Int, Int>? {
+    var best: Pair<Int, Int>? = null
+    var bestDist = Float.MAX_VALUE
     pixelShapes.forEachIndexed { shapeIdx, shape ->
         val handles = when (shape) {
             is AnnotationShape.Line -> listOf(shape.start, shape.end)
             is AnnotationShape.Angle -> listOf(shape.start, shape.center, shape.end)
             is AnnotationShape.Circle -> listOf(shape.center, shape.center + Offset(shape.radius, 0f))
         }
-        handles.forEachIndexed { handleIdx, handlePos ->
-            if (hypot((touch.x - handlePos.x).toDouble(), (touch.y - handlePos.y).toDouble()) <= slopPx) {
-                return Pair(shapeIdx, handleIdx)
+        handles.forEachIndexed { handleIdx, p ->
+            val d = hypot((touch.x - p.x).toDouble(), (touch.y - p.y).toDouble()).toFloat()
+            if (d <= slopPx && d <= bestDist) {
+                bestDist = d
+                best = shapeIdx to handleIdx
             }
         }
     }
-    return null
+    return best
 }
 
-fun findHitShape(
+private fun findHitShape(
     pixelShapes: List<AnnotationShape>,
     touch: Offset,
     slopPx: Float,
@@ -688,7 +712,7 @@ fun findHitShape(
     var bestIndex: Int? = null
     pixelShapes.forEachIndexed { index, shape ->
         val dist = HitTesting.distanceTo(shape, touch)
-        if (dist <= slopPx && dist < minDistance) {
+        if (dist <= slopPx && dist <= minDistance) {
             minDistance = dist
             bestIndex = index
         }

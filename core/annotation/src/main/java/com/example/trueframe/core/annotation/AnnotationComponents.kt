@@ -1,9 +1,18 @@
 package com.example.trueframe.core.annotation
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
+
+/** Canonical colors for annotation shapes across the app. */
+object AnnotationColors {
+    val Line = Color(0xFFFF6D00)     // Orange for lines
+    val Angle = Color(0xFF00E676)    // Green for angles
+    val Circle = Color(0xFF448AFF)   // Blue for circles
+    val Selected = Color(0xFFFFEB3B) // Yellow for selected shape
+}
 
 /**
  * Sealed hierarchy of annotation shapes.

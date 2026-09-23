@@ -5,7 +5,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -26,24 +28,27 @@ fun AnnotationOverlay(
     shapes: List<AnnotationShape>,
     modifier: Modifier = Modifier,
     selectedIndex: Int? = null,
+    activeDragTarget: Pair<Int, Int>? = null,
     showHandles: Boolean = true,
     rotationDegrees: Int = 0,
     frameAspect: Float = 1f,
     sourceWidthPx: Float = 0f,
-    lineColor: Color = Color(0xFFFF6D00),
-    angleColor: Color = Color(0xFF00E676),
-    circleColor: Color = Color(0xFF448AFF),
-    selectedColor: Color = Color(0xFFFFEB3B),
+    lineColor: Color = AnnotationColors.Line,
+    angleColor: Color = AnnotationColors.Angle,
+    circleColor: Color = AnnotationColors.Circle,
 ) {
     val density = LocalDensity.current
     val strokePx = with(density) { 3.dp.toPx() }
     val handlePx = with(density) { 9.dp.toPx() }
+    val pillCornerPx = with(density) { 6.dp.toPx() }
+    val pillPadHorizPx = with(density) { 6.dp.toPx() }
+    val pillPadVertPx = with(density) { 3.dp.toPx() }
+
     val textPaint = remember(density) {
         Paint().apply {
-            textSize = with(density) { 16.dp.toPx() }
+            textSize = with(density) { 14.dp.toPx() }
             isAntiAlias = true
             isFakeBoldText = true
-            setShadowLayer(6f, 2f, 2f, android.graphics.Color.BLACK)
         }
     }
 
@@ -63,34 +68,72 @@ fun AnnotationOverlay(
                 .rotateNorm(rotationDegrees, frameAspect)
                 .toPixelSpace(w, h)
 
+            val color = when (pixelShape) {
+                is AnnotationShape.Line -> lineColor
+                is AnnotationShape.Angle -> angleColor
+                is AnnotationShape.Circle -> circleColor
+            }
+
+            // Draw faint glow underneath selected shape
+            if (isSelected) {
+                val glowStroke = stroke * 3f
+                val glowColor = color.copy(alpha = 0.25f)
+                when (pixelShape) {
+                    is AnnotationShape.Line -> {
+                        drawLine(color = glowColor, start = pixelShape.start, end = pixelShape.end, strokeWidth = glowStroke, cap = StrokeCap.Round)
+                    }
+                    is AnnotationShape.Angle -> {
+                        drawLine(color = glowColor, start = pixelShape.center, end = pixelShape.start, strokeWidth = glowStroke, cap = StrokeCap.Round)
+                        drawLine(color = glowColor, start = pixelShape.center, end = pixelShape.end, strokeWidth = glowStroke, cap = StrokeCap.Round)
+                    }
+                    is AnnotationShape.Circle -> {
+                        drawCircle(color = glowColor, radius = pixelShape.radius, center = pixelShape.center, style = Stroke(width = glowStroke))
+                    }
+                }
+            }
+
+            val draggedHandleIdx = if (activeDragTarget?.first == index) activeDragTarget.second else null
+
             when (pixelShape) {
                 is AnnotationShape.Line -> drawAnnotationLine(
                     line = pixelShape,
-                    color = if (isSelected) selectedColor else lineColor,
+                    color = lineColor,
                     strokeWidth = stroke,
                     showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
+                    draggedHandleIdx = draggedHandleIdx,
                     textPaint = textPaint,
                     toSource = toSource,
                     viewWidth = w,
+                    cornerPx = pillCornerPx,
+                    padHorizPx = pillPadHorizPx,
+                    padVertPx = pillPadVertPx,
                 )
                 is AnnotationShape.Angle -> drawAnnotationAngle(
                     angle = pixelShape,
-                    color = if (isSelected) selectedColor else angleColor,
+                    color = angleColor,
                     strokeWidth = stroke,
                     showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
+                    draggedHandleIdx = draggedHandleIdx,
                     textPaint = textPaint,
+                    cornerPx = pillCornerPx,
+                    padHorizPx = pillPadHorizPx,
+                    padVertPx = pillPadVertPx,
                 )
                 is AnnotationShape.Circle -> drawAnnotationCircle(
                     circle = pixelShape,
-                    color = if (isSelected) selectedColor else circleColor,
+                    color = circleColor,
                     strokeWidth = stroke,
                     showHandles = drawHandlesForShape,
                     handleRadius = handlePx,
+                    draggedHandleIdx = draggedHandleIdx,
                     textPaint = textPaint,
                     toSource = toSource,
                     viewWidth = w,
+                    cornerPx = pillCornerPx,
+                    padHorizPx = pillPadHorizPx,
+                    padVertPx = pillPadVertPx,
                 )
             }
         }
@@ -141,11 +184,45 @@ fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
     }
 }
 
-private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float) {
+private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float, isDragged: Boolean = false) {
+    val r = if (isDragged) radius * 1.3f else radius
     // Outer white ring
-    drawCircle(color = Color.White, radius = radius, center = center)
+    drawCircle(color = Color.White, radius = r, center = center)
     // Inner colored circle
-    drawCircle(color = color, radius = radius * 0.65f, center = center)
+    drawCircle(color = color, radius = r * 0.65f, center = center)
+}
+
+private fun DrawScope.drawPillLabel(
+    text: String,
+    position: Offset,
+    color: Color,
+    textPaint: Paint,
+    cornerPx: Float,
+    padHorizPx: Float,
+    padVertPx: Float,
+) {
+    textPaint.color = color.toArgb()
+    val textWidth = textPaint.measureText(text)
+    val fontMetrics = textPaint.fontMetrics
+
+    val pillLeft = position.x
+    val pillTop = position.y + fontMetrics.ascent - padVertPx
+    val pillRight = position.x + textWidth + padHorizPx * 2f
+    val pillBottom = position.y + fontMetrics.descent + padVertPx
+
+    drawRoundRect(
+        color = Color.Black.copy(alpha = 0.6f),
+        topLeft = Offset(pillLeft, pillTop),
+        size = Size(pillRight - pillLeft, pillBottom - pillTop),
+        cornerRadius = CornerRadius(cornerPx, cornerPx)
+    )
+
+    drawContext.canvas.nativeCanvas.drawText(
+        text,
+        pillLeft + padHorizPx,
+        position.y,
+        textPaint
+    )
 }
 
 private fun DrawScope.drawAnnotationLine(
@@ -154,9 +231,13 @@ private fun DrawScope.drawAnnotationLine(
     strokeWidth: Float,
     showHandles: Boolean,
     handleRadius: Float,
+    draggedHandleIdx: Int?,
     textPaint: Paint,
     toSource: Float,
     viewWidth: Float,
+    cornerPx: Float,
+    padHorizPx: Float,
+    padVertPx: Float,
 ) {
     drawLine(
         color = color,
@@ -166,8 +247,8 @@ private fun DrawScope.drawAnnotationLine(
         cap = StrokeCap.Round,
     )
     if (showHandles) {
-        drawHandle(line.start, color, handleRadius)
-        drawHandle(line.end, color, handleRadius)
+        drawHandle(line.start, color, handleRadius, isDragged = (draggedHandleIdx == 0))
+        drawHandle(line.end, color, handleRadius, isDragged = (draggedHandleIdx == 1))
 
         // Distance text readout in source video pixels (or % if source width is unknown)
         val len = hypot((line.end.x - line.start.x).toDouble(), (line.end.y - line.start.y).toDouble()).toFloat()
@@ -176,9 +257,8 @@ private fun DrawScope.drawAnnotationLine(
         } else {
             String.format(Locale.US, "%.1f%%", (len / viewWidth) * 100f)
         }
-        textPaint.color = color.toArgb()
         val mid = Offset((line.start.x + line.end.x) / 2f, (line.start.y + line.end.y) / 2f)
-        drawContext.canvas.nativeCanvas.drawText(text, mid.x + 12f, mid.y - 12f, textPaint)
+        drawPillLabel(text, mid + Offset(12f, -12f), color, textPaint, cornerPx, padHorizPx, padVertPx)
     }
 }
 
@@ -188,23 +268,26 @@ private fun DrawScope.drawAnnotationAngle(
     strokeWidth: Float,
     showHandles: Boolean,
     handleRadius: Float,
+    draggedHandleIdx: Int?,
     textPaint: Paint,
+    cornerPx: Float,
+    padHorizPx: Float,
+    padVertPx: Float,
 ) {
     // Draw rays
     drawLine(color = color, start = angle.center, end = angle.start, strokeWidth = strokeWidth, cap = StrokeCap.Round)
     drawLine(color = color, start = angle.center, end = angle.end, strokeWidth = strokeWidth, cap = StrokeCap.Round)
 
     if (showHandles) {
-        drawHandle(angle.start, color, handleRadius)
-        drawHandle(angle.center, color, handleRadius)
-        drawHandle(angle.end, color, handleRadius)
+        drawHandle(angle.start, color, handleRadius, isDragged = (draggedHandleIdx == 0))
+        drawHandle(angle.center, color, handleRadius, isDragged = (draggedHandleIdx == 1))
+        drawHandle(angle.end, color, handleRadius, isDragged = (draggedHandleIdx == 2))
 
         // Render angle text in degrees
         val degrees = angle.degrees()
         val text = String.format(Locale.US, "%.1f°", degrees)
-        textPaint.color = color.toArgb()
-        val textOffset = angle.center + Offset(24f, -24f)
-        drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
+        val textOffset = angle.center + Offset(20f, -20f)
+        drawPillLabel(text, textOffset, color, textPaint, cornerPx, padHorizPx, padVertPx)
     }
 }
 
@@ -214,9 +297,13 @@ private fun DrawScope.drawAnnotationCircle(
     strokeWidth: Float,
     showHandles: Boolean,
     handleRadius: Float,
+    draggedHandleIdx: Int?,
     textPaint: Paint,
     toSource: Float,
     viewWidth: Float,
+    cornerPx: Float,
+    padHorizPx: Float,
+    padVertPx: Float,
 ) {
     drawCircle(
         color = color,
@@ -225,8 +312,8 @@ private fun DrawScope.drawAnnotationCircle(
         style = Stroke(width = strokeWidth),
     )
     if (showHandles) {
-        drawHandle(circle.center, color, handleRadius)
-        drawHandle(circle.center + Offset(circle.radius, 0f), color, handleRadius)
+        drawHandle(circle.center, color, handleRadius, isDragged = (draggedHandleIdx == 0))
+        drawHandle(circle.center + Offset(circle.radius, 0f), color, handleRadius, isDragged = (draggedHandleIdx == 1))
 
         // Radius text readout in source video pixels (or % if source width is unknown)
         val text = if (toSource > 0f) {
@@ -234,8 +321,7 @@ private fun DrawScope.drawAnnotationCircle(
         } else {
             String.format(Locale.US, "r: %.1f%%", (circle.radius / viewWidth) * 100f)
         }
-        textPaint.color = color.toArgb()
         val textOffset = circle.center + Offset(circle.radius + 12f, -12f)
-        drawContext.canvas.nativeCanvas.drawText(text, textOffset.x, textOffset.y, textPaint)
+        drawPillLabel(text, textOffset, color, textPaint, cornerPx, padHorizPx, padVertPx)
     }
 }
