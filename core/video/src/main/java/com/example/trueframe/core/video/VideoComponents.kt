@@ -135,6 +135,9 @@ class ProxyTranscoder {
             }
             
             if (!isCancelled && isActive) {
+                muxer.stop()
+                muxer.release()
+                muxer = null
                 _state.value = TranscodeState.Complete
             } else {
                 _state.value = TranscodeState.Idle

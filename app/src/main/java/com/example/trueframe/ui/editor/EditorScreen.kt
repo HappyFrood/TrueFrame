@@ -4,6 +4,7 @@
 package com.example.trueframe.ui.editor
 
 import android.net.Uri
+import android.view.TextureView
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -43,6 +45,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,16 +55,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -77,8 +85,6 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import com.example.trueframe.core.annotation.AnnotationOverlay
 import com.example.trueframe.core.annotation.AnnotationShape
 import com.example.trueframe.core.annotation.HitTesting
@@ -110,8 +116,8 @@ fun EditorScreen(
     var activeShapeDragIndex by remember { mutableStateOf<Int?>(null) }
     val currentAnnotations by rememberUpdatedState(uiState.annotations)
 
-    var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var scrubPositionMs by remember { mutableLongStateOf(0L) }
+    var currentPositionMs by rememberSaveable { mutableLongStateOf(0L) }
+    var scrubPositionMs by rememberSaveable { mutableLongStateOf(0L) }
     var totalDurationMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var isScrubbing by remember { mutableStateOf(false) }
@@ -133,6 +139,9 @@ fun EditorScreen(
             ExoPlayer.Builder(context).build().apply {
                 setMediaItem(MediaItem.fromUri(Uri.parse(uiState.videoUri)))
                 prepare()
+                if (currentPositionMs > 0L) {
+                    seekTo(currentPositionMs)
+                }
             }
         } else null
     }
@@ -150,6 +159,7 @@ fun EditorScreen(
         val player = exoPlayer ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(size: VideoSize) {
+                // Note: unappliedRotationDegrees is dead code on API 21+ (Media3 lets the codec apply rotation and reports display-oriented size with unappliedRotationDegrees == 0).
                 val rot = size.unappliedRotationDegrees
                 if (rot == 90 || rot == 270) {
                     videoW = size.height
@@ -164,12 +174,20 @@ fun EditorScreen(
                 isPlaying = playing
                 if (playing) {
                     viewModel.selectAnnotation(null)
+                } else {
+                    val idx = FrameMath.frameForMs(player.currentPosition, frameRate)
+                    val snapped = FrameMath.msForFrame(idx, frameRate).coerceIn(0L, totalDurationMs.coerceAtLeast(0L))
+                    player.setSeekParameters(SeekParameters.EXACT)
+                    player.seekTo(snapped)
+                    currentPositionMs = snapped
                 }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) {
                     totalDurationMs = player.duration.coerceAtLeast(1L)
                     player.videoFormat?.frameRate?.let { if (it > 0f) frameRate = it }
+                } else if (state == Player.STATE_ENDED) {
+                    currentPositionMs = player.currentPosition
                 }
             }
             override fun onPositionDiscontinuity(
@@ -210,6 +228,15 @@ fun EditorScreen(
         viewModel.updatePlayerState(currentPositionMs, totalDurationMs, isPlaying, frameRate)
     }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(uiState.error) {
+        val err = uiState.error
+        if (err != null) {
+            snackbarHostState.showSnackbar(err)
+            viewModel.clearError()
+        }
+    }
+
     if (showRenameDialog) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
@@ -243,6 +270,7 @@ fun EditorScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -479,6 +507,7 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .size(fittedWidthDp, fittedHeightDp)
+                        .clipToBounds()
                         .pointerInput(vw, vh, uiState.rotationDegrees, rawWidth, rawHeight, shapeTouchPx) {
                             detectTapGestures { tap ->
                                 val pixelShapes = currentAnnotations.map {
@@ -536,28 +565,20 @@ fun EditorScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     if (exoPlayer != null) {
-                        AndroidView(
-                            factory = { ctx ->
-                                PlayerView(ctx).apply {
-                                    player = exoPlayer
-                                    useController = false
-                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                    // Disable touch consumption so parent Box can detect drag gestures
-                                    isClickable = false
-                                    isFocusable = false
-                                }
-                            },
-                            update = { view ->
-                                if (view.player !== exoPlayer) {
-                                    view.player = exoPlayer
-                                }
-                                val target = uiState.rotationDegrees.toFloat()
-                                if (view.rotation != target) {
-                                    view.rotation = target
-                                }
-                            },
-                            modifier = Modifier.size(viewWidthDp, viewHeightDp)
-                        )
+                        key(exoPlayer) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    TextureView(ctx).also { tv -> exoPlayer.setVideoTextureView(tv) }
+                                },
+                                onRelease = { tv ->
+                                    runCatching { exoPlayer.clearVideoTextureView(tv) }
+                                },
+                                modifier = Modifier
+                                    // requiredSize: must NOT be clamped by the parent box when sideways.
+                                    .requiredSize(viewWidthDp, viewHeightDp)
+                                    .graphicsLayer { rotationZ = uiState.rotationDegrees.toFloat() },
+                            )
+                        }
                     } else {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             if (uiState.error != null) {
@@ -575,7 +596,7 @@ fun EditorScreen(
                         showHandles = (!isPlaying),
                         rotationDegrees = uiState.rotationDegrees,
                         frameAspect = rawWidth / rawHeight,
-                        sourceWidthPx = rawWidth,
+                        sourceWidthPx = effectiveWidth,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

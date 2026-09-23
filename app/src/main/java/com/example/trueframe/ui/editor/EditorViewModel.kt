@@ -119,10 +119,12 @@ class EditorViewModel @Inject constructor(
     fun updatePlayerState(currentTimeMs: Long, totalDurationMs: Long, isPlaying: Boolean, frameRate: Float = 30f) {
         val frameIdx = FrameMath.frameForMs(currentTimeMs, frameRate)
         _uiState.update { current ->
-            if (current.frameIndex == frameIdx && current.frameRate == frameRate && current.isPlaying == isPlaying) {
+            if (current.frameIndex == frameIdx && current.frameRate == frameRate && current.isPlaying == isPlaying && current.currentTimeMs == currentTimeMs && current.totalDurationMs == totalDurationMs) {
                 current
             } else {
                 current.copy(
+                    currentTimeMs = currentTimeMs,
+                    totalDurationMs = totalDurationMs,
                     isPlaying = isPlaying,
                     frameRate = frameRate,
                     frameIndex = frameIdx,
@@ -303,17 +305,22 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
+    }
+
     fun shareCurrentFrame(context: Context) {
-        val videoUri = _uiState.value.videoUri ?: return
-        val currentMs = _uiState.value.currentTimeMs
-        val rotation = _uiState.value.rotationDegrees
-        val shapes = _uiState.value.annotations.map { it.shape }
+        val s = _uiState.value
+        val videoUri = s.videoUri ?: return
+        val timeUs = FrameMath.msForFrame(s.frameIndex, s.frameRate) * 1000L
+        val rotation = s.rotationDegrees
+        val shapes = s.annotations.map { it.shape }
 
         viewModelScope.launch {
             val uri = FrameExporter.exportAndShareFrame(
                 context = context,
                 videoUri = videoUri,
-                timeMs = currentMs,
+                timeUs = timeUs,
                 rotationDegrees = rotation,
                 annotations = shapes,
             )

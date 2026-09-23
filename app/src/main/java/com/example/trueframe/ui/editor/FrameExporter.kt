@@ -22,14 +22,30 @@ import kotlin.math.hypot
 
 object FrameExporter {
 
+    private fun Bitmap.rotated(degrees: Int): Bitmap {
+        val m = Matrix().apply { postRotate(degrees.toFloat()) }
+        return Bitmap.createBitmap(this, 0, 0, width, height, m, true)
+    }
+
+    fun needsMetaRotation(rawWidth: Int, rawHeight: Int, metaRotation: Int, metaW: Int, metaH: Int): Boolean {
+        if (metaRotation % 180 == 0) return false
+        val (dispW, dispH) = metaH to metaW
+        if (dispW <= 0 || dispH <= 0 || dispW == dispH) return false
+        return (rawWidth > rawHeight) != (dispW > dispH)
+    }
+
     suspend fun exportAndShareFrame(
         context: Context,
         videoUri: String,
-        timeMs: Long,
+        timeUs: Long,
         rotationDegrees: Int,
         annotations: List<AnnotationShape>,
     ): Uri? = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
+        var rawBitmap: Bitmap? = null
+        var displayBitmap: Bitmap? = null
+        var oriented: Bitmap? = null
+        var bitmap: Bitmap? = null
         try {
             if (videoUri.startsWith("content://")) {
                 retriever.setDataSource(context, Uri.parse(videoUri))
@@ -38,28 +54,31 @@ object FrameExporter {
             }
 
             // Extract frame bitmap
-            val rawBitmap = retriever.getFrameAtTime(
-                timeMs.coerceAtLeast(0L) * 1000L,
+            rawBitmap = retriever.getFrameAtTime(
+                timeUs.coerceAtLeast(0L),
                 MediaMetadataRetriever.OPTION_CLOSEST
             ) ?: return@withContext null
 
-            // Read video metadata rotation
-            val metaRotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            val totalRotation = (rotationDegrees + metaRotation) % 360
+            val metaRotation = retriever
+                .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            val metaW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val metaH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
 
-            val orientedBitmap = if (totalRotation != 0) {
-                val matrix = Matrix().apply { postRotate(totalRotation.toFloat()) }
-                Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-            } else {
-                rawBitmap
-            }
+            // Normally the platform has already applied metadata rotation. Only fix up if the bitmap's
+            // orientation clearly disagrees with the expected display orientation (non-square frames only).
+            val fixMeta = needsMetaRotation(rawBitmap.width, rawBitmap.height, metaRotation, metaW, metaH)
+            displayBitmap = if (fixMeta) rawBitmap.rotated(metaRotation) else rawBitmap
 
-            // Create mutable bitmap overlay
-            val bitmap = orientedBitmap.copy(Bitmap.Config.ARGB_8888, true)
+            // Aspect of the frame BEFORE user rotation — this is what rotateNorm() expects.
+            val frameAspect = displayBitmap.width.toFloat() / displayBitmap.height.toFloat()
+
+            val userRotation = ((rotationDegrees % 360) + 360) % 360
+            oriented = if (userRotation != 0) displayBitmap.rotated(userRotation) else displayBitmap
+
+            bitmap = oriented.copy(Bitmap.Config.ARGB_8888, true)
             val canvas = Canvas(bitmap)
             val width = bitmap.width.toFloat()
             val height = bitmap.height.toFloat()
-            val frameAspect = width / height
 
             // Paint setup
             val strokeWidthPx = (width * 0.005f).coerceAtLeast(4f)
@@ -134,6 +153,10 @@ object FrameExporter {
             e.printStackTrace()
             null
         } finally {
+            if (rawBitmap != null && rawBitmap !== bitmap && !rawBitmap.isRecycled) rawBitmap.recycle()
+            if (displayBitmap != null && displayBitmap !== bitmap && displayBitmap !== rawBitmap && !displayBitmap.isRecycled) displayBitmap.recycle()
+            if (oriented != null && oriented !== bitmap && oriented !== displayBitmap && oriented !== rawBitmap && !oriented.isRecycled) oriented.recycle()
+            if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
             try { retriever.release() } catch (_: Exception) {}
         }
     }
