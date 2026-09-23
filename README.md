@@ -2,7 +2,7 @@
 
 An offline Android app for coaches, athletes, and video analysts. Open a video from the device gallery, step through it frame by frame, and draw measurement annotations — lines, angles, circles — directly on the picture. Built for high-frame-rate sports footage (60 / 120 / 240 fps).
 
-**Status:** `v3.7`.
+**Status:** `v3.8`.
 
 **Non-goals for v1:** cloud sync, accounts, side-by-side comparison, trimming.
 
@@ -16,6 +16,7 @@ An offline Android app for coaches, athletes, and video analysts. Open a video f
 - [Data model](#data-model)
 - [Video pipeline](#video-pipeline)
 - [Annotation system & Frame Sharing](#annotation-system--frame-sharing)
+- [UI & Theming](#ui--theming)
 - [Threading & lifecycle rules](#threading--lifecycle-rules)
 - [Tech stack](#tech-stack)
 - [Getting started](#getting-started)
@@ -137,26 +138,35 @@ Videos imported via the photo picker are copied into durable app storage (`noBac
 
 `EditorScreen` renders video using Media3 ExoPlayer attached to a `TextureView` with `graphicsLayer` Z-rotation and `requiredSize` aspect bounds. Content is clipped via `clipToBounds()` and rotates seamlessly without aspect squashing.
 
-Transport controls support frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping on release, and guarded frame snapping on user pause.
+Transport controls support 50% larger touch targets, frame stepping (`±1`, `±10`), smooth scrubbing with frame snapping on release, and guarded frame snapping on user pause.
 
 ---
 
 ## Annotation system & Frame Sharing
 
-### Shapes
+### Shapes & Colors
 
-| Shape | Geometry | Measurement |
-|---|---|---|
-| 📏 Line | two endpoints | source video pixels (`px`) |
-| 📐 Angle | vertex + two rays | interior angle (`0–180°`) |
-| ⭕ Circle | center + radius | radial readout (`r: X px`) |
+| Shape | Geometry | Measurement | Canonical Color |
+|---|---|---|---|
+| 📏 Line | two endpoints | source video pixels (`px`) | Orange (`#FFFF6D00`) |
+| 📐 Angle | vertex + two rays | interior angle (`0–180°`) | Green (`#00E676`) |
+| ⭕ Circle | center + radius | radial readout (`r: X px`) | Blue (`#448AFF`) |
 
-### Interaction & Export
+### Interaction, Labels & Export
 
-- **Tap selection** — tapping a shape selects it.
-- **Handles & readouts** — interactive handles and measurement readouts appear on the active selected annotation when paused, and automatically hide during playback, scrubbing, or when tapping empty space.
+- **Tap selection & Faint Glow** — tapping a shape selects it. Selected shapes preserve their natural shape colors and render a faint glow path underneath at `3 × strokeWidth` with `25% alpha`.
+- **Pill Readout Labels** — measurement readouts are rendered on a 60% alpha black rounded-corner pill background (`6dp` radius, `6×3dp` padding) with text in the shape's color, guaranteeing high legibility over grass or white walls.
+- **Handles & Readouts** — interactive handles and measurement readouts appear on the active selected annotation when paused, and automatically hide during playback, scrubbing, or when tapping empty space. Active dragged handle grows by `1.3×` during drag.
 - **Golden-angle spawn** — new shapes spawn in a non-repeating golden-angle spiral (`spawnCounter++`) and are clamped inside `0.05..0.95` normalized bounds.
 - **Frame Sharing** — `FrameExporter` renders the exact displayed video frame and its vector annotations overlay into a JPEG image, which is shared using `FileProvider` and the Android system share sheet.
+
+---
+
+## UI & Theming
+
+- **Subdued Slate Dark Theme** — dark background (`#121316`), surface (`#191B1F`), and crisp near-white primary text (`#E3E5E8`).
+- **Project List Thumbnails & FPS** — project list items feature cached `64dp × 48dp` JPEG thumbnails (`cacheDir/thumbs/thumb_<id>.jpg`) and display duration and frame rate (e.g. `14.9s · 240 fps`).
+- **Jitter-Free Readouts & Toolbar** — time and frame readouts use tabular figures (`tnum`) and display FPS (`Frame 482 · 240 fps`). Bottom toolbar buttons (`Line`, `Angle`, `Circle`, `Share`, `Delete`, `Clear All`) sit in fixed layout slots with active/disabled states.
 
 ---
 
