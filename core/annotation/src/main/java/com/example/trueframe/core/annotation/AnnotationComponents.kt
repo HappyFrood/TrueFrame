@@ -8,7 +8,7 @@ import kotlin.math.hypot
 
 /** Canonical colors for annotation shapes across the app. */
 object AnnotationColors {
-    val Line = Color(0xFFFF6D00)     // Orange for lines
+    val Line = Color(0xFFFF8F00)     // Vibrant bright orange for lines
     val Angle = Color(0xFF00E676)    // Green for angles
     val Circle = Color(0xFF448AFF)   // Blue for circles
     @Suppress("unused")

@@ -220,8 +220,21 @@ fun EditorScreen(
         }
     }
 
+    LaunchedEffect(uiState.currentTimeMs) {
+        if (currentPositionMs == 0L && uiState.currentTimeMs > 0L) {
+            currentPositionMs = uiState.currentTimeMs
+            exoPlayer?.seekTo(currentPositionMs)
+        }
+    }
+
     LaunchedEffect(currentPositionMs, totalDurationMs, isPlaying, frameRate) {
         viewModel.updatePlayerState(currentPositionMs, totalDurationMs, isPlaying, frameRate)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.saveLastPosition(currentPositionMs)
+        }
     }
 
     val coroutineScope = rememberCoroutineScope()

@@ -38,7 +38,7 @@ fun AnnotationOverlay(
     circleColor: Color = AnnotationColors.Circle,
 ) {
     val density = LocalDensity.current
-    val strokePx = with(density) { 3.dp.toPx() }
+    val strokePx = with(density) { 3.6.dp.toPx() } // 20% thicker strokes
     val handlePx = with(density) { 9.dp.toPx() }
     val pillCornerPx = with(density) { 6.dp.toPx() }
     val pillPadHorizPx = with(density) { 6.dp.toPx() }
@@ -282,13 +282,13 @@ private fun DrawScope.drawAnnotationAngle(
         drawHandle(angle.start, color, handleRadius, isDragged = (draggedHandleIdx == 0))
         drawHandle(angle.center, color, handleRadius, isDragged = (draggedHandleIdx == 1))
         drawHandle(angle.end, color, handleRadius, isDragged = (draggedHandleIdx == 2))
-
-        // Render angle text in degrees
-        val degrees = angle.degrees()
-        val text = String.format(Locale.US, "%.1f°", degrees)
-        val textOffset = angle.center + Offset(20f, -20f)
-        drawPillLabel(text, textOffset, color, textPaint, cornerPx, padHorizPx, padVertPx)
     }
+
+    // Always render angle degree label continuously
+    val degrees = angle.degrees()
+    val text = String.format(Locale.US, "%.1f°", degrees)
+    val textOffset = angle.center + Offset(20f, -20f)
+    drawPillLabel(text, textOffset, color, textPaint, cornerPx, padHorizPx, padVertPx)
 }
 
 private fun DrawScope.drawAnnotationCircle(

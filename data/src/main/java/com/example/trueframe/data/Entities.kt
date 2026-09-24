@@ -13,6 +13,7 @@ data class ProjectEntity(
     val proxyUri: String? = null,
     val transcodeState: String = "PENDING",   // PENDING | RUNNING | COMPLETE | ERROR
     val rotationDegrees: Int = 0,
+    val lastPositionMs: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

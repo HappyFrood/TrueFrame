@@ -110,8 +110,8 @@ object FrameExporter {
             val width = bitmap.width.toFloat()
             val height = bitmap.height.toFloat()
 
-            // Paint setup
-            val strokeWidthPx = (width * 0.005f).coerceAtLeast(4f)
+            // Paint setup (20% thicker stroke)
+            val strokeWidthPx = (width * 0.006f).coerceAtLeast(4.8f)
 
             val linePaint = Paint().apply {
                 color = AnnotationColors.Line.toArgb()

@@ -2,7 +2,7 @@
 
 An offline Android app for coaches, athletes, and video analysts. Open a video from the device gallery, step through it frame by frame, and draw measurement annotations — lines, angles, circles — directly on the picture. Built for high-frame-rate sports footage (60 / 120 / 240 fps).
 
-**Status:** `v3.8`.
+**Status:** `v3.9`.
 
 **Non-goals for v1:** cloud sync, accounts, side-by-side comparison, trimming.
 
@@ -92,12 +92,13 @@ Shapes are stored and manipulated in **normalized video-frame space**: `(0,0)` i
 
 Conversion happens at the UI boundary against the fitted video box. Measurements are reported in source-video pixels (`px`), invariant under screen density, window resizes, and orientation rotation.
 
-### 2. Unified frame arithmetic via `FrameMath`
+### 2. Unified frame arithmetic & Position Persistence
 
 All frame calculations, time-to-frame conversions, and seek target calculations use `FrameMath` in `:core:video`:
 - `intervalMs(frameRate)` = `1000f / frameRate`
 - `frameForMs(timeMs, frameRate)` = `floor(timeMs / interval)`
 - `msForFrame(frame, frameRate)` = `(frame + 0.5f) * interval` (mid-frame target seeking prevents millisecond truncation errors)
+- **Position Persistence** — Last playback position (`lastPositionMs`) is saved to Room upon exiting or navigating away and restored when reopening the video.
 
 ### 3. Project-wide annotations
 
@@ -113,7 +114,7 @@ Annotation writes update Room on `onDragEnd` via `@Update`, preserving row IDs a
 
 ```text
 @Entity("projects")
-ProjectEntity(id, name, videoUri, proxyUri, transcodeState, rotationDegrees, createdAt, updatedAt)
+ProjectEntity(id, name, videoUri, proxyUri, transcodeState, rotationDegrees, lastPositionMs, createdAt, updatedAt)
 
 @Entity("annotations", FK -> projects CASCADE, index(projectId, frameIndex))
 AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)
@@ -123,6 +124,7 @@ AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)
 ```
 
 - `serializedData` is kotlinx-serialization JSON of shape geometry.
+- `lastPositionMs` stores the last saved playback position in milliseconds.
 - `transcodeState` tracks background conversion status (`PENDING`, `RUNNING`, `COMPLETE`, `ERROR`).
 - Project names are timestamped by default and editable from both the project list and editor top bar.
 
@@ -148,14 +150,15 @@ Transport controls support 50% larger touch targets, frame stepping (`±1`, `±1
 
 | Shape | Geometry | Measurement | Canonical Color |
 |---|---|---|---|
-| 📏 Line | two endpoints | source video pixels (`px`) | Orange (`#FFFF6D00`) |
-| 📐 Angle | vertex + two rays | interior angle (`0–180°`) | Green (`#00E676`) |
-| ⭕ Circle | center + radius | radial readout (`r: X px`) | Blue (`#448AFF`) |
+| 📏 Line | two endpoints | source video pixels (`px`) | Vibrant Orange (`#FFFF8F00`) |
+| 📐 Angle | vertex + two rays | interior angle (`0–180°`) | Mint Green (`#00E676`) |
+| ⭕ Circle | center + radius | radial readout (`r: X px`) | Sky Blue (`#448AFF`) |
 
 ### Interaction, Labels & Export
 
 - **Tap selection & Faint Glow** — tapping a shape selects it. Selected shapes preserve their natural shape colors and render a faint glow path underneath at `3 × strokeWidth` with `25% alpha`.
-- **Pill Readout Labels** — measurement readouts are rendered on a 60% alpha black rounded-corner pill background (`6dp` radius, `6×3dp` padding) with text in the shape's color, guaranteeing high legibility over grass or white walls.
+- **Continuous Angle Readout** — measured angle labels (`0–180°`) are rendered continuously on all angle annotations.
+- **Pill Readout Labels** — measurement readouts are rendered on a 60% alpha black rounded-corner pill background (`6dp` radius, `6×3dp` padding) with text in the shape's color, guaranteeing high legibility over bright grass or white walls.
 - **Handles & Readouts** — interactive handles and measurement readouts appear on the active selected annotation when paused, and automatically hide during playback, scrubbing, or when tapping empty space. Active dragged handle grows by `1.3×` during drag.
 - **Golden-angle spawn** — new shapes spawn in a non-repeating golden-angle spiral (`spawnCounter++`) and are clamped inside `0.05..0.95` normalized bounds.
 - **Frame Sharing** — `FrameExporter` renders the exact displayed video frame and its vector annotations overlay into a JPEG image, which is shared using `FileProvider` and the Android system share sheet.

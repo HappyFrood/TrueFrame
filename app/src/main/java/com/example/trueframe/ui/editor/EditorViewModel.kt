@@ -91,6 +91,7 @@ class EditorViewModel @Inject constructor(
                         videoUri = uri,
                         projectName = project.name,
                         rotationDegrees = project.rotationDegrees,
+                        currentTimeMs = project.lastPositionMs,
                     )
                 }
             } else {
@@ -99,6 +100,15 @@ class EditorViewModel @Inject constructor(
         }
 
         observeAnnotations()
+    }
+
+    fun saveLastPosition(positionMs: Long) {
+        if (projectId <= 0L || positionMs < 0L) return
+        viewModelScope.launch {
+            projectRepository.getById(projectId)?.let {
+                projectRepository.update(it.copy(lastPositionMs = positionMs, updatedAt = System.currentTimeMillis()))
+            }
+        }
     }
 
     private fun observeAnnotations() {
