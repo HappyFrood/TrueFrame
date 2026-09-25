@@ -42,7 +42,10 @@ object DatabaseModule {
             context,
             TrueFrameDatabase::class.java,
             "trueframe.db",
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+        )
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .fallbackToDestructiveMigrationOnDowngrade(true)
+            .build()
     }
 
     @Provides
