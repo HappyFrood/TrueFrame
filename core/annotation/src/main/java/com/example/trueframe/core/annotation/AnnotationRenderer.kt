@@ -7,9 +7,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -18,10 +21,63 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+
+/** On-screen annotation stroke width. The selected shape draws at 1.3×, its glow at 3× that. */
+val ANNOTATION_STROKE_DP = 5.4.dp
+
+/**
+ * Layout of a [AnnotationShape.Text] pill. Size scales with the frame so that the exported JPEG
+ * matches the screen: font size = `0.04 × min(frameWidth, frameHeight)`, with padding and corner
+ * radius proportional to the font size. Shared by the overlay, the exporter and hit-testing.
+ */
+object TextPill {
+    const val FONT_FRACTION = 0.04f
+    private const val PAD_H_FRACTION = 0.45f
+    private const val PAD_V_FRACTION = 0.25f
+    private const val CORNER_FRACTION = 0.4f
+
+    data class Layout(val rect: Rect, val textX: Float, val baselineY: Float, val cornerPx: Float)
+
+    fun newPaint(): Paint = Paint().apply {
+        isAntiAlias = true
+        isFakeBoldText = true
+    }
+
+    fun fontSizePx(frameWidth: Float, frameHeight: Float): Float = FONT_FRACTION * min(frameWidth, frameHeight)
+
+    /**
+     * [anchorPx] is the pill's top-left corner in pixel space. The pill is kept inside the frame
+     * so a label near the edge stays readable after rotation.
+     */
+    fun layout(text: String, anchorPx: Offset, frameWidth: Float, frameHeight: Float, paint: Paint): Layout {
+        val font = fontSizePx(frameWidth, frameHeight)
+        paint.textSize = font
+        val padH = font * PAD_H_FRACTION
+        val padV = font * PAD_V_FRACTION
+        val fm = paint.fontMetrics
+        val w = paint.measureText(text) + padH * 2f
+        val h = (fm.descent - fm.ascent) + padV * 2f
+        val left = anchorPx.x.coerceIn(0f, max(0f, frameWidth - w))
+        val top = anchorPx.y.coerceIn(0f, max(0f, frameHeight - h))
+        return Layout(
+            rect = Rect(left, top, left + w, top + h),
+            textX = left + padH,
+            baselineY = top + padV - fm.ascent,
+            cornerPx = font * CORNER_FRACTION,
+        )
+    }
+}
+
+/** Pill rect of a pixel-space [AnnotationShape.Text], for hit-testing (see [HitTesting.distanceTo]). */
+fun textPillRect(text: AnnotationShape.Text, frameWidth: Float, frameHeight: Float, paint: Paint = TextPill.newPaint()): Rect =
+    TextPill.layout(text.text, text.anchor, frameWidth, frameHeight, paint).rect
 
 /**
  * Composable Canvas overlay that renders annotation shapes on top of a video frame.
  * Includes interactive handle indicators and measurement values for the selected shape.
+ * [selectedIndex] and [activeDragTarget] are list indices resolved by the caller from annotation IDs.
  */
 @Composable
 fun AnnotationOverlay(
@@ -36,9 +92,11 @@ fun AnnotationOverlay(
     lineColor: Color = AnnotationColors.Line,
     angleColor: Color = AnnotationColors.Angle,
     circleColor: Color = AnnotationColors.Circle,
+    arrowColor: Color = AnnotationColors.Arrow,
+    textColor: Color = AnnotationColors.Text,
 ) {
     val density = LocalDensity.current
-    val strokePx = with(density) { 3.6.dp.toPx() } // 20% thicker strokes
+    val strokePx = with(density) { ANNOTATION_STROKE_DP.toPx() }
     val handlePx = with(density) { 9.dp.toPx() }
     val pillCornerPx = with(density) { 6.dp.toPx() }
     val pillPadHorizPx = with(density) { 6.dp.toPx() }
@@ -51,6 +109,7 @@ fun AnnotationOverlay(
             isFakeBoldText = true
         }
     }
+    val labelPaint = remember { TextPill.newPaint() }
 
     Canvas(modifier = modifier) {
         val w = size.width
@@ -72,6 +131,8 @@ fun AnnotationOverlay(
                 is AnnotationShape.Line -> lineColor
                 is AnnotationShape.Angle -> angleColor
                 is AnnotationShape.Circle -> circleColor
+                is AnnotationShape.Arrow -> arrowColor
+                is AnnotationShape.Text -> textColor
             }
 
             // Draw faint glow underneath selected shape
@@ -88,6 +149,21 @@ fun AnnotationOverlay(
                     }
                     is AnnotationShape.Circle -> {
                         drawCircle(color = glowColor, radius = pixelShape.radius, center = pixelShape.center, style = Stroke(width = glowStroke))
+                    }
+                    is AnnotationShape.Arrow -> {
+                        val g = ArrowGeometry.compute(pixelShape.start, pixelShape.end, stroke)
+                        drawLine(color = glowColor, start = g.tail, end = g.shaftEnd, strokeWidth = glowStroke, cap = StrokeCap.Round)
+                        drawPath(arrowHeadPath(g), color = glowColor, style = Stroke(width = glowStroke, join = StrokeJoin.Round))
+                    }
+                    is AnnotationShape.Text -> {
+                        val layout = TextPill.layout(pixelShape.text, pixelShape.anchor, w, h, labelPaint)
+                        drawRoundRect(
+                            color = glowColor,
+                            topLeft = layout.rect.topLeft,
+                            size = layout.rect.size,
+                            cornerRadius = CornerRadius(layout.cornerPx, layout.cornerPx),
+                            style = Stroke(width = glowStroke),
+                        )
                     }
                 }
             }
@@ -135,6 +211,24 @@ fun AnnotationOverlay(
                     padHorizPx = pillPadHorizPx,
                     padVertPx = pillPadVertPx,
                 )
+                is AnnotationShape.Arrow -> drawAnnotationArrow(
+                    arrow = pixelShape,
+                    color = arrowColor,
+                    strokeWidth = stroke,
+                    showHandles = drawHandlesForShape,
+                    handleRadius = handlePx,
+                    draggedHandleIdx = draggedHandleIdx,
+                )
+                is AnnotationShape.Text -> drawAnnotationText(
+                    text = pixelShape,
+                    color = textColor,
+                    frameWidth = w,
+                    frameHeight = h,
+                    paint = labelPaint,
+                    showHandles = drawHandlesForShape,
+                    handleRadius = handlePx,
+                    draggedHandleIdx = draggedHandleIdx,
+                )
             }
         }
     }
@@ -146,6 +240,8 @@ fun AnnotationShape.toPixelSpace(w: Float, h: Float): AnnotationShape = when (th
     is AnnotationShape.Line -> AnnotationShape.Line(start.toPixel(w, h), end.toPixel(w, h))
     is AnnotationShape.Angle -> AnnotationShape.Angle(start.toPixel(w, h), center.toPixel(w, h), end.toPixel(w, h))
     is AnnotationShape.Circle -> AnnotationShape.Circle(center.toPixel(w, h), radius * w)
+    is AnnotationShape.Arrow -> AnnotationShape.Arrow(start.toPixel(w, h), end.toPixel(w, h))
+    is AnnotationShape.Text -> AnnotationShape.Text(anchor.toPixel(w, h), text)
 }
 
 fun Offset.rotateNorm(degrees: Int): Offset {
@@ -169,9 +265,10 @@ fun Offset.rotateVectorNorm(degrees: Int): Offset =
 fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
     val normDegrees = (degrees % 360 + 360) % 360
     if (normDegrees == 0) return this
-    
+
     return when (this) {
         is AnnotationShape.Line -> AnnotationShape.Line(start.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
+        is AnnotationShape.Arrow -> AnnotationShape.Arrow(start.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
         is AnnotationShape.Angle -> AnnotationShape.Angle(start.rotateNorm(normDegrees), center.rotateNorm(normDegrees), end.rotateNorm(normDegrees))
         is AnnotationShape.Circle -> {
             val newRadius = if (normDegrees == 90 || normDegrees == 270) {
@@ -181,7 +278,16 @@ fun AnnotationShape.rotateNorm(degrees: Int, aspect: Float): AnnotationShape {
             }
             AnnotationShape.Circle(center.rotateNorm(normDegrees), newRadius)
         }
+        // Only the anchor moves; the glyphs always render upright.
+        is AnnotationShape.Text -> copy(anchor = anchor.rotateNorm(normDegrees))
     }
+}
+
+private fun arrowHeadPath(g: ArrowGeometry): Path = Path().apply {
+    moveTo(g.tip.x, g.tip.y)
+    lineTo(g.left.x, g.left.y)
+    lineTo(g.right.x, g.right.y)
+    close()
 }
 
 private fun DrawScope.drawHandle(center: Offset, color: Color, radius: Float, isDragged: Boolean = false) {
@@ -323,5 +429,47 @@ private fun DrawScope.drawAnnotationCircle(
         }
         val textOffset = circle.center + Offset(circle.radius + 12f, -12f)
         drawPillLabel(text, textOffset, color, textPaint, cornerPx, padHorizPx, padVertPx)
+    }
+}
+
+private fun DrawScope.drawAnnotationArrow(
+    arrow: AnnotationShape.Arrow,
+    color: Color,
+    strokeWidth: Float,
+    showHandles: Boolean,
+    handleRadius: Float,
+    draggedHandleIdx: Int?,
+) {
+    val g = ArrowGeometry.compute(arrow.start, arrow.end, strokeWidth)
+    drawLine(color = color, start = g.tail, end = g.shaftEnd, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+    drawPath(arrowHeadPath(g), color = color)
+    // No measurement label: an arrow is a pointer, not a ruler.
+    if (showHandles) {
+        drawHandle(arrow.start, color, handleRadius, isDragged = (draggedHandleIdx == 0))
+        drawHandle(arrow.end, color, handleRadius, isDragged = (draggedHandleIdx == 1))
+    }
+}
+
+private fun DrawScope.drawAnnotationText(
+    text: AnnotationShape.Text,
+    color: Color,
+    frameWidth: Float,
+    frameHeight: Float,
+    paint: Paint,
+    showHandles: Boolean,
+    handleRadius: Float,
+    draggedHandleIdx: Int?,
+) {
+    val layout = TextPill.layout(text.text, text.anchor, frameWidth, frameHeight, paint)
+    drawRoundRect(
+        color = Color.Black.copy(alpha = 0.6f),
+        topLeft = layout.rect.topLeft,
+        size = layout.rect.size,
+        cornerRadius = CornerRadius(layout.cornerPx, layout.cornerPx),
+    )
+    paint.color = color.toArgb()
+    drawContext.canvas.nativeCanvas.drawText(text.text, layout.textX, layout.baselineY, paint)
+    if (showHandles) {
+        drawHandle(layout.rect.topLeft, color, handleRadius, isDragged = (draggedHandleIdx == 0))
     }
 }

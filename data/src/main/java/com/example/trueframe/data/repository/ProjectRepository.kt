@@ -24,6 +24,18 @@ class ProjectRepository @Inject constructor(
         projectDao.update(project.copy(updatedAt = System.currentTimeMillis()))
     }
 
+    suspend fun updateLastPosition(id: Long, positionMs: Long) {
+        projectDao.updateLastPosition(id, positionMs, System.currentTimeMillis())
+    }
+
+    suspend fun updateRotation(id: Long, rotationDegrees: Int) {
+        projectDao.updateRotation(id, rotationDegrees, System.currentTimeMillis())
+    }
+
+    suspend fun updateName(id: Long, name: String) {
+        projectDao.updateName(id, name, System.currentTimeMillis())
+    }
+
     suspend fun delete(project: ProjectEntity) {
         projectDao.delete(project)
     }

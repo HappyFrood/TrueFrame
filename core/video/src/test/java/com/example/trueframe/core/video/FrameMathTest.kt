@@ -1,6 +1,8 @@
 package com.example.trueframe.core.video
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FrameMathTest {
@@ -90,5 +92,44 @@ class FrameMathTest {
             val targetMsCapped = FrameMath.calculateTargetTimeMs(currentFrameIdx = 1000, delta = 500, frameRate = fps, totalDurationMs = totalDurationMs)
             assertEquals(totalDurationMs, targetMsCapped)
         }
+    }
+
+    @Test
+    fun fpsFallback_usesComputedFpsWhenPlayerReportsNone() {
+        val computed = FrameMath.fpsFromSampleCount(sampleCount = 2400, durationUs = 10_000_000L)
+        assertEquals(240f, computed!!, 0.001f)
+
+        val resolved = FrameMath.resolveFrameRate(playerFps = null, computedFps = computed)
+        assertEquals(240f, resolved.fps, 0.001f)
+        assertEquals(FrameRateSource.COMPUTED, resolved.source)
+
+        // Stepping +1 at the computed rate lands on the next real frame, not ~8 frames ahead.
+        val target = FrameMath.calculateTargetTimeMs(currentFrameIdx = 100, delta = 1, frameRate = resolved.fps)
+        assertEquals(101, FrameMath.frameForMs(target, resolved.fps))
+    }
+
+    @Test
+    fun fpsFallback_prefersPlayerAndAssumes30WhenNothingKnown() {
+        assertEquals(FrameRateSource.PLAYER, FrameMath.resolveFrameRate(60f, 240f).source)
+        assertEquals(60f, FrameMath.resolveFrameRate(60f, 240f).fps)
+        assertEquals(FrameRateSource.COMPUTED, FrameMath.resolveFrameRate(0f, 120f).source)
+
+        val assumed = FrameMath.resolveFrameRate(null, null)
+        assertEquals(FrameMath.ASSUMED_FPS, assumed.fps)
+        assertTrue(assumed.isAssumed)
+    }
+
+    @Test
+    fun fpsFromSampleCount_rejectsUnusableInputs() {
+        assertNull(FrameMath.fpsFromSampleCount(0, 1_000_000L))
+        assertNull(FrameMath.fpsFromSampleCount(1, 1_000_000L))
+        assertNull(FrameMath.fpsFromSampleCount(100, 0L))
+    }
+
+    @Test
+    fun speedFps_prefersHigherCaptureRate() {
+        assertEquals(240f, FrameMath.speedFps(playbackFps = 30f, captureFps = 240f))
+        assertEquals(60f, FrameMath.speedFps(playbackFps = 60f, captureFps = 60f))
+        assertEquals(60f, FrameMath.speedFps(playbackFps = 60f, captureFps = null))
     }
 }
