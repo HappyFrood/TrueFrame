@@ -25,6 +25,17 @@ interface ProjectDao {
     @Update
     suspend fun update(project: ProjectEntity)
 
+    // Targeted single-column updates. Use these instead of read-copy-update so that overlapping
+    // writes (e.g. rotate, then leave the screen) never restore stale values in other columns.
+    @Query("UPDATE projects SET lastPositionMs = :positionMs, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateLastPosition(id: Long, positionMs: Long, updatedAt: Long)
+
+    @Query("UPDATE projects SET rotationDegrees = :rotationDegrees, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateRotation(id: Long, rotationDegrees: Int, updatedAt: Long)
+
+    @Query("UPDATE projects SET name = :name, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateName(id: Long, name: String, updatedAt: Long)
+
     @Delete
     suspend fun delete(project: ProjectEntity)
 }

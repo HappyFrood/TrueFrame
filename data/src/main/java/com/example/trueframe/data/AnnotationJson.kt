@@ -51,18 +51,35 @@ sealed interface SerializableShape {
         @Serializable(with = OffsetSerializer::class) val center: Offset,
         val radius: Float,
     ) : SerializableShape
+
+    // v4 additions. Never rename a subclass: its class name is the JSON "type" discriminator.
+    @Serializable
+    data class Arrow(
+        @Serializable(with = OffsetSerializer::class) val start: Offset,
+        @Serializable(with = OffsetSerializer::class) val end: Offset,
+    ) : SerializableShape
+
+    @Serializable
+    data class Text(
+        @Serializable(with = OffsetSerializer::class) val anchor: Offset,
+        val text: String,
+    ) : SerializableShape
 }
 
 fun AnnotationShape.toSerializable(): SerializableShape = when (this) {
     is AnnotationShape.Line -> SerializableShape.Line(start, end)
     is AnnotationShape.Angle -> SerializableShape.Angle(start, center, end)
     is AnnotationShape.Circle -> SerializableShape.Circle(center, radius)
+    is AnnotationShape.Arrow -> SerializableShape.Arrow(start, end)
+    is AnnotationShape.Text -> SerializableShape.Text(anchor, text)
 }
 
 fun SerializableShape.toAnnotationShape(): AnnotationShape = when (this) {
     is SerializableShape.Line -> AnnotationShape.Line(start, end)
     is SerializableShape.Angle -> AnnotationShape.Angle(start, center, end)
     is SerializableShape.Circle -> AnnotationShape.Circle(center, radius)
+    is SerializableShape.Arrow -> AnnotationShape.Arrow(start, end)
+    is SerializableShape.Text -> AnnotationShape.Text(anchor, text)
 }
 
 object AnnotationJson {

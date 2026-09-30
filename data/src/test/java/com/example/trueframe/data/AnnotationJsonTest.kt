@@ -31,4 +31,48 @@ class AnnotationJsonTest {
         val result = AnnotationJson.deserialize(malformedJson)
         assertNull(result)
     }
+
+    @Test
+    fun arrow_roundTrip() {
+        val arrow = AnnotationShape.Arrow(Offset(0.2f, 0.3f), Offset(0.8f, 0.35f))
+        val json = AnnotationJson.serialize(arrow)
+        assertTrue(json.contains("\"type\""))
+        assertEquals(arrow, AnnotationJson.deserialize(json))
+    }
+
+    @Test
+    fun text_roundTrip_withQuotesCommasAndEmoji() {
+        for (content in listOf("Hips \"open\", knees soft", "Nice 🏌️‍♂️ swing!", "a,b,c", "back\\slash")) {
+            val text = AnnotationShape.Text(Offset(0.4f, 0.6f), content)
+            assertEquals(text, AnnotationJson.deserialize(AnnotationJson.serialize(text)))
+        }
+    }
+
+    @Test
+    fun backCompat_v3JsonForLineAngleCircleStillDecodes() {
+        // Exact strings produced by the v3 app (class-name discriminator, "x,y" offsets).
+        val line = AnnotationJson.deserialize(
+            "{\"type\":\"com.example.trueframe.data.SerializableShape.Line\",\"start\":\"0.3,0.5\",\"end\":\"0.7,0.5\"}"
+        )
+        assertEquals(AnnotationShape.Line(Offset(0.3f, 0.5f), Offset(0.7f, 0.5f)), line)
+
+        val angle = AnnotationJson.deserialize(
+            "{\"type\":\"com.example.trueframe.data.SerializableShape.Angle\",\"start\":\"0.3,0.4\",\"center\":\"0.5,0.5\",\"end\":\"0.7,0.4\"}"
+        )
+        assertEquals(AnnotationShape.Angle(Offset(0.3f, 0.4f), Offset(0.5f, 0.5f), Offset(0.7f, 0.4f)), angle)
+
+        val circle = AnnotationJson.deserialize(
+            "{\"type\":\"com.example.trueframe.data.SerializableShape.Circle\",\"center\":\"0.5,0.5\",\"radius\":0.15}"
+        )
+        assertEquals(AnnotationShape.Circle(Offset(0.5f, 0.5f), 0.15f), circle)
+    }
+
+    @Test
+    fun serializedDiscriminators_matchClassNames() {
+        val json = AnnotationJson.serialize(AnnotationShape.Line(Offset(0.3f, 0.5f), Offset(0.7f, 0.5f)))
+        assertEquals(
+            "{\"type\":\"com.example.trueframe.data.SerializableShape.Line\",\"start\":\"0.3,0.5\",\"end\":\"0.7,0.5\"}",
+            json,
+        )
+    }
 }

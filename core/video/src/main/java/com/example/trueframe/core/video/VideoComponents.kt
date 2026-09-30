@@ -16,9 +16,12 @@ import java.io.File
 import java.nio.ByteBuffer
 
 /**
- * Transcodes source video into a lower-resolution proxy using MediaCodec + OpenGL + MediaMuxer.
- * OpenGL surface bakes in rotation metadata so downstream doesn't need to handle it.
- * Spec: "MediaCodec + OpenGL + MediaMuxer", "OpenGL bakes rotation."
+ * Remuxes the source video track into app storage using MediaExtractor + MediaMuxer.
+ *
+ * This is **not** a transcode: compressed samples are copied as-is at full resolution, with no
+ * re-encode and no downscale. Rotation is carried over as an orientation hint (not baked into the
+ * pixels). Color / HDR metadata, profile, level and frame rate are copied from the source track
+ * format so 10-bit and HDR clips keep correct colors. Audio is dropped.
  */
 class ProxyTranscoder {
 
@@ -36,9 +39,8 @@ class ProxyTranscoder {
     private var isCancelled = false
 
     /**
-     * Starts transcoding [sourceUri] into a proxy file at [outputPath].
+     * Starts remuxing [sourceUri] into a proxy file at [outputPath].
      * Should be called from a Foreground Service to prevent OS killing the process.
-     * Spec: "Foreground Service to prevent OS killing transcode."
      */
     suspend fun start(sourceUri: String, outputPath: String, context: Context? = null) = withContext(Dispatchers.IO) {
         _state.value = TranscodeState.Progress(0f)
@@ -99,6 +101,10 @@ class ProxyTranscoder {
             if (format.containsKey("csd-1")) {
                 cleanFormat.setByteBuffer("csd-1", format.getByteBuffer("csd-1"))
             }
+            if (format.containsKey("csd-2")) {
+                cleanFormat.setByteBuffer("csd-2", format.getByteBuffer("csd-2"))
+            }
+            copyMetadataKeys(format, cleanFormat)
 
             val actualOutputPath = outputPath.removePrefix("file://")
             muxer = MediaMuxer(actualOutputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
@@ -108,8 +114,7 @@ class ProxyTranscoder {
             val outputTrack = muxer.addTrack(cleanFormat)
             muxer.start()
             
-            // Allocate a larger buffer to handle 4K frames
-            val buffer = ByteBuffer.allocate(10 * 1024 * 1024)
+            val buffer = ByteBuffer.allocate(sampleBufferSize(format))
             val bufferInfo = MediaCodec.BufferInfo()
             
             val duration = try { format.getLong(MediaFormat.KEY_DURATION) } catch (_: Exception) { 0L }
@@ -159,8 +164,43 @@ class ProxyTranscoder {
         }
     }
 
+    private fun copyMetadataKeys(from: MediaFormat, to: MediaFormat) {
+        for (key in INT_KEYS) {
+            if (from.containsKey(key)) runCatching { to.setInteger(key, from.getInteger(key)) }
+        }
+        if (from.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+            // Frame rate may be stored as either an int or a float depending on the extractor.
+            runCatching { to.setInteger(MediaFormat.KEY_FRAME_RATE, from.getInteger(MediaFormat.KEY_FRAME_RATE)) }
+                .onFailure { runCatching { to.setFloat(MediaFormat.KEY_FRAME_RATE, from.getFloat(MediaFormat.KEY_FRAME_RATE)) } }
+        }
+        if (from.containsKey(MediaFormat.KEY_HDR_STATIC_INFO)) {
+            runCatching { to.setByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO, from.getByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO)) }
+        }
+    }
+
     fun cancel() {
         isCancelled = true
         _state.value = TranscodeState.Idle
+    }
+
+    companion object {
+        /** Fallback sample buffer when the track doesn't report max-input-size (high-bitrate 4K keyframes fit). */
+        const val DEFAULT_SAMPLE_BUFFER_BYTES = 32 * 1024 * 1024
+
+        private val INT_KEYS = listOf(
+            MediaFormat.KEY_COLOR_STANDARD,
+            MediaFormat.KEY_COLOR_TRANSFER,
+            MediaFormat.KEY_COLOR_RANGE,
+            MediaFormat.KEY_PROFILE,
+            MediaFormat.KEY_LEVEL,
+        )
+
+        /** Buffer size from the track's max-input-size when present, else [DEFAULT_SAMPLE_BUFFER_BYTES]. */
+        fun sampleBufferSize(maxInputSize: Int?): Int =
+            if (maxInputSize != null && maxInputSize > 0) maxInputSize else DEFAULT_SAMPLE_BUFFER_BYTES
+
+        private fun sampleBufferSize(format: MediaFormat): Int = sampleBufferSize(
+            if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) else null
+        )
     }
 }

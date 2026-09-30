@@ -22,9 +22,9 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Foreground service to run video transcoding in the background.
- * Spec: "Foreground Service to prevent OS killing transcode."
- * Spec: "Guaranteed transcode execution."
+ * Foreground service that runs the proxy remux ([com.example.trueframe.core.video.ProxyTranscoder])
+ * in the background so the OS doesn't kill it mid-import. (Historical name: it remuxes, it
+ * doesn't transcode.)
  */
 @AndroidEntryPoint
 class TranscodeService : Service() {

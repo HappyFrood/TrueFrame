@@ -6,14 +6,19 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
+import androidx.compose.ui.geometry.Offset
 import com.example.trueframe.core.annotation.AnnotationColors
 import com.example.trueframe.core.annotation.AnnotationShape
+import com.example.trueframe.core.annotation.ArrowGeometry
+import com.example.trueframe.core.annotation.TextPill
 import com.example.trueframe.core.annotation.rotateNorm
 import com.example.trueframe.core.annotation.toPixelSpace
 import kotlinx.coroutines.Dispatchers
@@ -23,11 +28,30 @@ import java.io.FileOutputStream
 import java.util.Locale
 import kotlin.math.hypot
 
+/**
+ * Renders the displayed frame plus its vector annotations into a JPEG and returns a shareable
+ * FileProvider URI. Screen and export use the same geometry (stroke scales with bitmap width,
+ * text pills with `min(width, height)`).
+ *
+ * When a [Ghost] is passed, the ghost frame is grabbed at full resolution the same way as the
+ * current frame and blended at the ghost's opacity **under** the annotations. The grid and Speed
+ * markers are never exported.
+ */
 object FrameExporter {
+
+    /** Ghost frame to blend into the export. [timeUs] is the ghost frame's timestamp. */
+    data class Ghost(val timeUs: Long, val opacity: Float)
 
     private fun Bitmap.rotated(degrees: Int): Bitmap {
         val m = Matrix().apply { postRotate(degrees.toFloat()) }
         return Bitmap.createBitmap(this, 0, 0, width, height, m, true)
+    }
+
+    private fun arrowHeadPath(tip: Offset, left: Offset, right: Offset): Path = Path().apply {
+        moveTo(tip.x, tip.y)
+        lineTo(left.x, left.y)
+        lineTo(right.x, right.y)
+        close()
     }
 
     fun needsMetaRotation(rawWidth: Int, rawHeight: Int, metaRotation: Int, metaW: Int, metaH: Int): Boolean {
@@ -64,18 +88,42 @@ object FrameExporter {
         canvas.drawText(text, pillLeft + paddingHorizPx, labelY, textPaint)
     }
 
+    /**
+     * Grabs the frame at [timeUs] and fixes up metadata rotation when the platform didn't apply it.
+     * Returns the frame in display orientation (before user rotation), or null on failure.
+     */
+    private fun grabDisplayFrame(retriever: MediaMetadataRetriever, timeUs: Long): Bitmap? {
+        val rawBitmap = retriever.getFrameAtTime(
+            timeUs.coerceAtLeast(0L),
+            MediaMetadataRetriever.OPTION_CLOSEST
+        ) ?: return null
+
+        val metaRotation = retriever
+            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+        val metaW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+        val metaH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+
+        // Normally the platform has already applied metadata rotation. Only fix up if the bitmap's
+        // orientation clearly disagrees with the expected display orientation (non-square frames only).
+        if (!needsMetaRotation(rawBitmap.width, rawBitmap.height, metaRotation, metaW, metaH)) return rawBitmap
+        val fixed = rawBitmap.rotated(metaRotation)
+        if (fixed !== rawBitmap) rawBitmap.recycle()
+        return fixed
+    }
+
     suspend fun exportAndShareFrame(
         context: Context,
         videoUri: String,
         timeUs: Long,
         rotationDegrees: Int,
         annotations: List<AnnotationShape>,
+        ghost: Ghost? = null,
     ): Uri? = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
-        var rawBitmap: Bitmap? = null
         var displayBitmap: Bitmap? = null
         var oriented: Bitmap? = null
         var bitmap: Bitmap? = null
+        var ghostBitmap: Bitmap? = null
         try {
             if (videoUri.startsWith("content://")) {
                 retriever.setDataSource(context, videoUri.toUri())
@@ -83,22 +131,7 @@ object FrameExporter {
                 retriever.setDataSource(videoUri)
             }
 
-            // Extract frame bitmap
-            rawBitmap = retriever.getFrameAtTime(
-                timeUs.coerceAtLeast(0L),
-                MediaMetadataRetriever.OPTION_CLOSEST
-            ) ?: return@withContext null
-
-            val metaRotation = retriever
-                .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            val metaW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val metaH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-
-            // Normally the platform has already applied metadata rotation. Only fix up if the bitmap's
-            // orientation clearly disagrees with the expected display orientation (non-square frames only).
-            val fixMeta = needsMetaRotation(rawBitmap.width, rawBitmap.height, metaRotation, metaW, metaH)
-            displayBitmap = if (fixMeta) rawBitmap.rotated(metaRotation) else rawBitmap
-
+            displayBitmap = grabDisplayFrame(retriever, timeUs) ?: return@withContext null
             // Aspect of the frame BEFORE user rotation — this is what rotateNorm() expects.
             val frameAspect = displayBitmap.width.toFloat() / displayBitmap.height.toFloat()
 
@@ -110,8 +143,21 @@ object FrameExporter {
             val width = bitmap.width.toFloat()
             val height = bitmap.height.toFloat()
 
-            // Paint setup (20% thicker stroke)
-            val strokeWidthPx = (width * 0.006f).coerceAtLeast(4.8f)
+            // Ghost frame: same grab + orientation path as the current frame, blended under annotations.
+            if (ghost != null) {
+                ghostBitmap = grabDisplayFrame(retriever, ghost.timeUs)?.let { g ->
+                    if (userRotation != 0) g.rotated(userRotation).also { r -> if (r !== g) g.recycle() } else g
+                }
+                ghostBitmap?.let { g ->
+                    val ghostPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                        alpha = (ghost.opacity.coerceIn(0f, 1f) * 255).toInt()
+                    }
+                    canvas.drawBitmap(g, Rect(0, 0, g.width, g.height), RectF(0f, 0f, width, height), ghostPaint)
+                }
+            }
+
+            // Paint setup (50% thicker than v3; keep in sync with ANNOTATION_STROKE_DP on screen)
+            val strokeWidthPx = (width * 0.009f).coerceAtLeast(7.2f)
 
             val linePaint = Paint().apply {
                 color = AnnotationColors.Line.toArgb()
@@ -133,6 +179,19 @@ object FrameExporter {
                 style = Paint.Style.STROKE
                 isAntiAlias = true
             }
+            val arrowPaint = Paint().apply {
+                color = AnnotationColors.Arrow.toArgb()
+                strokeWidth = strokeWidthPx
+                style = Paint.Style.STROKE
+                isAntiAlias = true
+                strokeCap = Paint.Cap.ROUND
+            }
+            val arrowHeadPaint = Paint().apply {
+                color = AnnotationColors.Arrow.toArgb()
+                style = Paint.Style.FILL
+                isAntiAlias = true
+            }
+            val labelPaint = TextPill.newPaint()
             val textPaint = Paint().apply {
                 textSize = (width * 0.022f).coerceAtLeast(20f)
                 isAntiAlias = true
@@ -187,6 +246,18 @@ object FrameExporter {
                             cornerPx, padHorizPx, padVertPx
                         )
                     }
+                    is AnnotationShape.Arrow -> {
+                        val g = ArrowGeometry.compute(pixelShape.start, pixelShape.end, strokeWidthPx)
+                        canvas.drawLine(g.tail.x, g.tail.y, g.shaftEnd.x, g.shaftEnd.y, arrowPaint)
+                        canvas.drawPath(arrowHeadPath(g.tip, g.left, g.right), arrowHeadPaint)
+                    }
+                    is AnnotationShape.Text -> {
+                        val layout = TextPill.layout(pixelShape.text, pixelShape.anchor, width, height, labelPaint)
+                        val r = layout.rect
+                        canvas.drawRoundRect(RectF(r.left, r.top, r.right, r.bottom), layout.cornerPx, layout.cornerPx, bgPaint)
+                        labelPaint.color = AnnotationColors.Text.toArgb()
+                        canvas.drawText(pixelShape.text, layout.textX, layout.baselineY, labelPaint)
+                    }
                 }
             }
 
@@ -208,9 +279,9 @@ object FrameExporter {
             e.printStackTrace()
             null
         } finally {
-            if (rawBitmap != null && rawBitmap !== bitmap && !rawBitmap.isRecycled) rawBitmap.recycle()
-            if (displayBitmap != null && displayBitmap !== bitmap && displayBitmap !== rawBitmap && !displayBitmap.isRecycled) displayBitmap.recycle()
-            if (oriented != null && oriented !== bitmap && oriented !== displayBitmap && oriented !== rawBitmap && !oriented.isRecycled) oriented.recycle()
+            if (displayBitmap != null && displayBitmap !== bitmap && !displayBitmap.isRecycled) displayBitmap.recycle()
+            if (oriented != null && oriented !== bitmap && oriented !== displayBitmap && !oriented.isRecycled) oriented.recycle()
+            ghostBitmap?.let { if (!it.isRecycled) it.recycle() }
             if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
             try { retriever.release() } catch (_: Exception) {}
         }

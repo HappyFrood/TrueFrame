@@ -34,7 +34,7 @@ data class AnnotationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val projectId: Long,
     val frameIndex: Int,
-    val shapeType: String, // "line", "angle", "circle"
+    val shapeType: String, // "line", "angle", "circle", "arrow", "text"
     val serializedData: String, // JSON of shape geometry
 )
 
