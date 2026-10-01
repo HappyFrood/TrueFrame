@@ -13,6 +13,7 @@ import com.example.trueframe.core.video.FrameRateSource
 import com.example.trueframe.data.AnnotationDao
 import com.example.trueframe.data.AnnotationEntity
 import com.example.trueframe.data.AnnotationJson
+import com.example.trueframe.data.ProjectEntity
 import com.example.trueframe.data.repository.ProjectRepository
 import com.example.trueframe.di.ApplicationScope
 import com.example.trueframe.di.VideoMetadataProbe
@@ -190,7 +191,7 @@ class EditorViewModel @Inject constructor(
                         currentTimeMs = project.lastPositionMs,
                     )
                 }
-                probeFrameRate(uri)
+                loadFrameRates(project)
             } else {
                 _uiState.update { it.copy(loadError = "Project not found") }
             }
@@ -199,13 +200,31 @@ class EditorViewModel @Inject constructor(
         observeAnnotations()
     }
 
-    private fun probeFrameRate(uri: String) {
+    /**
+     * Frame-rate metadata comes from the **original** file: the remuxed proxy loses the capture-rate
+     * tag (`com.android.capture.fps`) that slow-motion clips rely on. Values are read at import and
+     * stored on the project; older projects are probed once here and backfilled.
+     */
+    private fun loadFrameRates(project: ProjectEntity) {
         probeJob?.cancel()
+        if (project.frameRate != null || project.captureFps != null) {
+            computedFps = project.frameRate
+            _uiState.update { it.copy(captureFps = project.captureFps) }
+            applyFrameRate()
+            return
+        }
         probeJob = viewModelScope.launch {
-            val result = runCatching { videoMetadataProbe.probe(uri) }.getOrNull() ?: return@launch
+            suspend fun probe(uri: String) = runCatching { videoMetadataProbe.probe(uri) }.getOrNull()
+                ?.takeIf { it.computedFps != null || it.captureFps != null }
+            val result = probe(project.videoUri)
+                ?: project.proxyUri?.let { probe(it) }
+                ?: return@launch
             computedFps = result.computedFps
             _uiState.update { it.copy(captureFps = result.captureFps) }
             applyFrameRate()
+            if (result.computedFps != null || result.captureFps != null) {
+                projectRepository.updateFrameRates(project.id, result.computedFps, result.captureFps)
+            }
         }
     }
 
@@ -584,6 +603,38 @@ class EditorViewModel @Inject constructor(
             }
         }
     }
+
+    /** Moves one reference endpoint by [delta] (relative drag, so the end isn't hidden under the finger). */
+    fun offsetReferenceHandle(handleIndex: Int, delta: Offset) {
+        updateSpeed {
+            when (handleIndex) {
+                0 -> it.copy(referenceStart = (it.referenceStart + delta).clampUnit(), error = null)
+                1 -> it.copy(referenceEnd = (it.referenceEnd + delta).clampUnit(), error = null)
+                else -> it
+            }
+        }
+    }
+
+    /**
+     * Moves the current step's ball marker (A in step 3, B in step 4) by [delta] and re-stamps it
+     * with the current frame, so a marker can be dragged into place on whatever frame is shown.
+     */
+    fun offsetSpeedMarker(delta: Offset) {
+        val frame = _uiState.value.frameIndex
+        updateSpeed {
+            when (it.step) {
+                SpeedStep.BALL_START -> it.markerA?.let { m ->
+                    it.copy(markerA = SpeedMarker((m.position + delta).clampUnit(), frame), error = null)
+                } ?: it
+                SpeedStep.BALL_END -> it.markerB?.let { m ->
+                    it.copy(markerB = SpeedMarker((m.position + delta).clampUnit(), frame), error = null)
+                } ?: it
+                else -> it
+            }
+        }
+    }
+
+    private fun Offset.clampUnit(): Offset = Offset(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
 
     fun offsetReference(delta: Offset) {
         updateSpeed { it.copy(referenceStart = it.referenceStart + delta, referenceEnd = it.referenceEnd + delta, error = null) }

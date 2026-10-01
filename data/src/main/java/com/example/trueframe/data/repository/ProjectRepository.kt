@@ -14,9 +14,9 @@ class ProjectRepository @Inject constructor(
 
     suspend fun getById(id: Long): ProjectEntity? = projectDao.getById(id)
 
-    suspend fun create(name: String, videoUri: String): Long {
+    suspend fun create(name: String, videoUri: String, frameRate: Float? = null, captureFps: Float? = null): Long {
         return projectDao.insert(
-            ProjectEntity(name = name, videoUri = videoUri)
+            ProjectEntity(name = name, videoUri = videoUri, frameRate = frameRate, captureFps = captureFps)
         )
     }
 
@@ -34,6 +34,10 @@ class ProjectRepository @Inject constructor(
 
     suspend fun updateName(id: Long, name: String) {
         projectDao.updateName(id, name, System.currentTimeMillis())
+    }
+
+    suspend fun updateFrameRates(id: Long, frameRate: Float?, captureFps: Float?) {
+        projectDao.updateFrameRates(id, frameRate, captureFps)
     }
 
     suspend fun delete(project: ProjectEntity) {

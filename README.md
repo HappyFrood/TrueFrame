@@ -125,7 +125,7 @@ Project fields are written with targeted single-column DAO updates (`updateLastP
 
 ```text
 @Entity("projects")
-ProjectEntity(id, name, videoUri, proxyUri, transcodeState, rotationDegrees, lastPositionMs, createdAt, updatedAt)
+ProjectEntity(id, name, videoUri, proxyUri, transcodeState, rotationDegrees, lastPositionMs, frameRate, captureFps, createdAt, updatedAt)
 
 @Entity("annotations", FK -> projects CASCADE, index(projectId, frameIndex))
 AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)   // shapeType: line | angle | circle | arrow | text
@@ -136,6 +136,7 @@ AnnotationEntity(id, projectId, frameIndex, shapeType, serializedData)   // shap
 
 - `serializedData` is kotlinx-serialization JSON of shape geometry. The `type` discriminator is the `SerializableShape` subclass name, so existing subclasses are never renamed — new shapes are only added.
 - `lastPositionMs` stores the last saved playback position in milliseconds.
+- `frameRate` / `captureFps` hold the original file's playback and capture (slow-motion) frame rates, read at import (schema v4, `MIGRATION_3_4`). Projects imported before v4 are probed once on first load and backfilled.
 - `transcodeState` tracks background conversion status (`PENDING`, `RUNNING`, `COMPLETE`, `ERROR`).
 - Project names are timestamped by default and editable from both the project list and the editor header.
 
@@ -152,10 +153,10 @@ Videos imported via the photo picker are copied into durable app storage (`noBac
 The editor holds the frame rate in `EditorUiState` (`frameRate`, `frameRateSource`):
 
 1. the player's reported `videoFormat.frameRate`, when positive;
-2. otherwise a rate computed on `Dispatchers.IO` by `VideoProbe` (frame count / duration from `MediaMetadataRetriever`, falling back to counting samples with `MediaExtractor`);
+2. otherwise the rate stored on the project, computed by `VideoProbe` (frame count / duration from `MediaMetadataRetriever`, falling back to counting samples with `MediaExtractor`);
 3. otherwise 30 fps, marked **assumed** — the readout then shows `fps?`.
 
-`VideoProbe` also reads `METADATA_KEY_CAPTURE_FRAMERATE` (`captureFps`), used by the Speed Calculator.
+`VideoProbe` also reads `METADATA_KEY_CAPTURE_FRAMERATE` (`captureFps`), used by the Speed Calculator and shown in the readout as `F 482 · 240 fps slo-mo` when it exceeds the playback rate. Frame-rate metadata is always read from the **original** imported file, never the proxy: MediaMuxer does not carry the capture-rate tag (`com.android.capture.fps`) into the remux. It is read once at import (and backfilled on first load for older projects) and stored on `ProjectEntity`.
 
 ### Playback & Rotation
 
@@ -209,11 +210,13 @@ Freezes one frame (e.g. address) and shows it semi-transparent over the video wh
 
 Estimates ball speed in **mph** from an object of known length in the frame. A step-by-step Speed mode replaces the tool row with `Cancel · step · Back · Next`; annotation tap/drag is disabled, while the scrub bar and frame stepping stay active. A slim banner floats over the video.
 
-1. **Reference** — drag a temporary white line onto an object of known length.
+1. **Reference** — drag a temporary white line onto an object of known length. Endpoints are marked with perpendicular ticks inside hollow rings, so the end of the object stays visible.
 2. **Known length** — enter the length in inches (1–600); quick-fill chips: Driver 45", Tennis racket 27", Baseball bat 33", Pickleball paddle 16".
 3. **Ball start** — go to the frame where the ball starts and tap its center (marker **A**, records the frame).
 4. **Ball end** — step forward and tap the ball again (marker **B**; Next requires a different frame).
 5. **Result card** — speed, detail line, fps chips (30/60/120/240/480 + custom, live recalculation), *Redo ball*, *Add as label* (creates a persistent Text annotation at B on B's frame) and *Done*.
+
+Handles and markers move **relative** to the finger (they never jump under it, so you can grab slightly off the point), and a 3× magnifier with a crosshair appears on the opposite side of the video while dragging. Markers can be dragged as well as tapped; dragging re-stamps the marker with the frame currently shown.
 
 The calibration is kept for the session ("Use previous reference" skips steps 1–2). Reference line and markers are temporary and never exported.
 

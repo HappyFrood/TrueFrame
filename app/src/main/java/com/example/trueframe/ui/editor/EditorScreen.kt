@@ -75,6 +75,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -115,6 +116,8 @@ import kotlin.time.Duration.Companion.milliseconds
 
 private enum class GhostMenuAnchor { NONE, BUTTON, CHIP }
 
+private enum class SpeedDragTarget { REF_START, REF_END, REF_LINE, MARKER }
+
 @Composable
 fun EditorScreen(
     projectId: Long,
@@ -132,8 +135,9 @@ fun EditorScreen(
     // Drag targets are tracked by annotation ID, never by list index (indices shift on re-emit).
     var activeDragTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var activeShapeDragId by remember { mutableStateOf<Long?>(null) }
-    var speedDragHandle by remember { mutableStateOf<Int?>(null) }
-    var speedDragLine by remember { mutableStateOf(false) }
+    var speedDrag by remember { mutableStateOf<SpeedDragTarget?>(null) }
+    // Frame snapshot for the Speed-mode magnifier; only held while a handle or marker is dragged.
+    var loupeFrame by remember { mutableStateOf<ImageBitmap?>(null) }
     val latestState by rememberUpdatedState(uiState)
 
     var currentPositionMs by rememberSaveable { mutableLongStateOf(0L) }
@@ -466,7 +470,9 @@ fun EditorScreen(
     // ------------------------------------------------------------------ Shared pieces
 
     val timeText = timeReadout(if (isScrubbing) scrubPositionMs else currentPositionMs, totalDurationMs)
-    val frameText = frameReadout(currentFrameIdx, frameRate, uiState.frameRateAssumed, uiState.selectedAnnotation?.frameIndex)
+    val frameText = frameReadout(
+        currentFrameIdx, frameRate, uiState.frameRateAssumed, uiState.selectedAnnotation?.frameIndex, uiState.captureFps,
+    )
     val sliderMs = if (isScrubbing) scrubPositionMs else currentPositionMs
     val toolState = ToolState(
         ghostOn = uiState.isGhostOn,
@@ -551,6 +557,7 @@ fun EditorScreen(
             val containerHeight = maxHeight
             val density = LocalDensity.current.density
             val handleTouchPx = with(LocalDensity.current) { 24.dp.toPx() }
+            val speedHandleTouchPx = with(LocalDensity.current) { 36.dp.toPx() }
             val shapeTouchPx = with(LocalDensity.current) { 20.dp.toPx() }
             val hitPaint = remember { TextPill.newPaint() }
 
@@ -613,18 +620,36 @@ fun EditorScreen(
                                 val state = latestState
                                 val speedState = state.speed
                                 if (speedState != null) {
-                                    if (speedState.step != SpeedStep.REFERENCE) return@detectDragGestures
-                                    val a = speedState.referenceStart.rotateNorm(state.rotationDegrees).let { Offset(it.x * vw, it.y * vh) }
-                                    val b = speedState.referenceEnd.rotateNorm(state.rotationDegrees).let { Offset(it.x * vw, it.y * vh) }
-                                    val da = (startOffset - a).getDistance()
-                                    val db = (startOffset - b).getDistance()
-                                    speedDragHandle = when {
-                                        da <= handleTouchPx && da <= db -> 0
-                                        db <= handleTouchPx -> 1
+                                    fun px(p: Offset) = p.rotateNorm(state.rotationDegrees).let { Offset(it.x * vw, it.y * vh) }
+                                    speedDrag = when (speedState.step) {
+                                        SpeedStep.REFERENCE -> {
+                                            val a = px(speedState.referenceStart)
+                                            val b = px(speedState.referenceEnd)
+                                            val da = (startOffset - a).getDistance()
+                                            val db = (startOffset - b).getDistance()
+                                            when {
+                                                da <= speedHandleTouchPx && da <= db -> SpeedDragTarget.REF_START
+                                                db <= speedHandleTouchPx -> SpeedDragTarget.REF_END
+                                                HitTesting.distanceTo(AnnotationShape.Line(a, b), startOffset) <= shapeTouchPx -> SpeedDragTarget.REF_LINE
+                                                else -> null
+                                            }
+                                        }
+                                        SpeedStep.BALL_START, SpeedStep.BALL_END -> {
+                                            val marker = if (speedState.step == SpeedStep.BALL_START) speedState.markerA else speedState.markerB
+                                            // Grab an existing marker near the finger and move it relative to the finger,
+                                            // otherwise drop it where the drag started and move it from there.
+                                            if (marker == null || (startOffset - px(marker.position)).getDistance() > speedHandleTouchPx * 1.5f) {
+                                                viewModel.placeSpeedMarker(unrotated(startOffset))
+                                            } else {
+                                                viewModel.offsetSpeedMarker(Offset.Zero)
+                                            }
+                                            SpeedDragTarget.MARKER
+                                        }
                                         else -> null
                                     }
-                                    speedDragLine = speedDragHandle == null &&
-                                        HitTesting.distanceTo(AnnotationShape.Line(a, b), startOffset) <= shapeTouchPx
+                                    if (speedDrag != null && speedDrag != SpeedDragTarget.REF_LINE) {
+                                        loupeFrame = textureView?.bitmap?.asImageBitmap()
+                                    }
                                     return@detectDragGestures
                                 }
                                 viewModel.onDragStarted()
@@ -651,11 +676,14 @@ fun EditorScreen(
                                 val unrotatedDelta = Offset(dragAmount.x / vw, dragAmount.y / vh).rotateVectorNorm(-rotation)
 
                                 if (latestState.speed != null) {
-                                    val handle = speedDragHandle
-                                    if (handle != null) {
-                                        viewModel.moveReferenceHandle(handle, unrotatedPos)
-                                    } else if (speedDragLine) {
-                                        viewModel.offsetReference(unrotatedDelta)
+                                    // Relative moves: the point never jumps under the finger, so the
+                                    // user can grab slightly off the end and still see it.
+                                    when (speedDrag) {
+                                        SpeedDragTarget.REF_START -> viewModel.offsetReferenceHandle(0, unrotatedDelta)
+                                        SpeedDragTarget.REF_END -> viewModel.offsetReferenceHandle(1, unrotatedDelta)
+                                        SpeedDragTarget.REF_LINE -> viewModel.offsetReference(unrotatedDelta)
+                                        SpeedDragTarget.MARKER -> viewModel.offsetSpeedMarker(unrotatedDelta)
+                                        null -> Unit
                                     }
                                     return@detectDragGestures
                                 }
@@ -668,16 +696,16 @@ fun EditorScreen(
                                 }
                             },
                             onDragEnd = {
-                                speedDragHandle = null
-                                speedDragLine = false
+                                speedDrag = null
+                                loupeFrame = null
                                 val draggedId = activeDragTarget?.first ?: activeShapeDragId
                                 activeDragTarget = null
                                 activeShapeDragId = null
                                 if (latestState.speed == null) viewModel.persistAnnotationsOnDragEnd(draggedId)
                             },
                             onDragCancel = {
-                                speedDragHandle = null
-                                speedDragLine = false
+                                speedDrag = null
+                                loupeFrame = null
                                 activeDragTarget = null
                                 activeShapeDragId = null
                                 viewModel.onDragCancelled()
@@ -746,6 +774,29 @@ fun EditorScreen(
                 if (speed != null) {
                     SpeedOverlay(speed, uiState.rotationDegrees, Modifier.fillMaxSize())
                 }
+            }
+
+            // Magnifier while dragging a Speed handle/marker, placed on the side away from the finger.
+            val loupe = loupeFrame
+            val loupeFocus = speed?.let { sp ->
+                when (speedDrag) {
+                    SpeedDragTarget.REF_START -> sp.referenceStart
+                    SpeedDragTarget.REF_END -> sp.referenceEnd
+                    SpeedDragTarget.MARKER -> if (sp.step == SpeedStep.BALL_START) sp.markerA?.position else sp.markerB?.position
+                    else -> null
+                }
+            }
+            if (loupe != null && speed != null && loupeFocus != null) {
+                val onLeft = loupeFocus.rotateNorm(uiState.rotationDegrees).x < 0.5f
+                SpeedLoupe(
+                    frame = loupe,
+                    focus = loupeFocus,
+                    speed = speed,
+                    rotationDegrees = uiState.rotationDegrees,
+                    modifier = Modifier
+                        .align(if (onLeft) Alignment.TopEnd else Alignment.TopStart)
+                        .padding(top = 72.dp, start = 12.dp, end = 12.dp),
+                )
             }
 
             // ---- Floating overlays: never change the video box size.

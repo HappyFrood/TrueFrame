@@ -8,8 +8,10 @@ import android.net.Uri
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.trueframe.core.video.FrameMath
 import com.example.trueframe.core.video.TranscodeBus
 import com.example.trueframe.core.video.TranscodeEvent
+import com.example.trueframe.core.video.VideoProbe
 import com.example.trueframe.data.ProjectEntity
 import com.example.trueframe.data.ProxyCacheManager
 import com.example.trueframe.data.repository.ProjectRepository
@@ -112,9 +114,19 @@ class MainScreenViewModel @Inject constructor(
                     val durMs = durMsStr?.toLongOrNull() ?: 0L
                     if (durMs > 0) durSec = durMs / 1000f
 
-                    val fpsStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
-                        ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)
-                    frameRate = fpsStr?.toFloatOrNull() ?: 30f
+                    // Real-time rate: capture fps for slow-motion clips, else the playback rate.
+                    // Uses values stored at import; older projects are probed (and backfilled).
+                    var playback = project.frameRate
+                    var capture = project.captureFps
+                    if (playback == null && capture == null) {
+                        val probed = VideoProbe.probe(context, videoUri)
+                        playback = probed.computedFps
+                        capture = probed.captureFps
+                        if (playback != null || capture != null) {
+                            projectRepository.updateFrameRates(project.id, playback, capture)
+                        }
+                    }
+                    frameRate = playback?.let { FrameMath.speedFps(it, capture) } ?: capture
 
                     val thumbDir = File(context.cacheDir, "thumbs").apply { if (!exists()) mkdirs() }
                     val thumbFile = File(thumbDir, "thumb_${project.id}.jpg")
@@ -197,8 +209,17 @@ class MainScreenViewModel @Inject constructor(
                 }
             }
 
+            // 3. Read frame-rate metadata from the original file now: the proxy remux drops the
+            //    capture-rate tag that slow-motion clips depend on.
+            val rates = VideoProbe.probe(context, durableUri)
+
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            val projectId = projectRepository.create(name = "Video $timestamp", videoUri = durableUri)
+            val projectId = projectRepository.create(
+                name = "Video $timestamp",
+                videoUri = durableUri,
+                frameRate = rates.computedFps,
+                captureFps = rates.captureFps,
+            )
 
             _activeTranscodeProjectId.value = projectId
             val proxyPath = proxyCacheManager.generateProxyPath(projectId)

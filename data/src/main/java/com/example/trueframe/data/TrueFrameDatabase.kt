@@ -10,7 +10,7 @@ import androidx.room.RoomDatabase
         TagEntity::class,
         ProjectTagCrossRef::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class TrueFrameDatabase : RoomDatabase() {

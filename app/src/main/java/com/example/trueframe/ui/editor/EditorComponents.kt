@@ -67,7 +67,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -96,8 +100,16 @@ private val tabular: TextStyle
 internal fun timeReadout(positionMs: Long, durationMs: Long): String =
     String.format(Locale.US, "%.2f / %.2f s", positionMs / 1000f, durationMs / 1000f)
 
-internal fun frameReadout(frameIdx: Int, fps: Float, fpsAssumed: Boolean, selectedDrawnFrame: Int?): String = when {
+internal fun frameReadout(
+    frameIdx: Int,
+    fps: Float,
+    fpsAssumed: Boolean,
+    selectedDrawnFrame: Int?,
+    captureFps: Float? = null,
+): String = when {
     selectedDrawnFrame != null -> String.format(Locale.US, "F %d · drawn F %d", frameIdx, selectedDrawnFrame)
+    // Slow-motion saved at a lower playback rate: show the real-time capture rate.
+    captureFps != null && captureFps > fps + 0.5f -> String.format(Locale.US, "F %d · %.0f fps slo-mo", frameIdx, captureFps)
     fpsAssumed -> String.format(Locale.US, "F %d · fps?", frameIdx)
     else -> String.format(Locale.US, "F %d · %.0f fps", frameIdx, fps)
 }
@@ -640,8 +652,10 @@ internal fun SpeedOverlay(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val lineStroke = with(density) { 3.dp.toPx() }
-    val handleR = with(density) { 9.dp.toPx() }
+    val lineStroke = with(density) { 2.dp.toPx() }
+    val ringStroke = with(density) { 1.5.dp.toPx() }
+    val tickHalf = with(density) { 8.dp.toPx() }
+    val handleR = with(density) { 16.dp.toPx() }
     val markerR = with(density) { 14.dp.toPx() }
     val labelPaint = remember(density) {
         Paint().apply {
@@ -662,19 +676,34 @@ internal fun SpeedOverlay(
         val a = px(speed.referenceStart)
         val b = px(speed.referenceEnd)
         val refColor = Color.White.copy(alpha = if (editingReference) 1f else 0.5f)
-        drawLine(refColor, a, b, strokeWidth = lineStroke, cap = StrokeCap.Round)
+        val halo = Color.Black.copy(alpha = if (editingReference) 0.55f else 0.3f)
+        // Thin line with a dark halo, plus perpendicular end ticks marking the exact endpoints.
+        drawLine(halo, a, b, strokeWidth = lineStroke * 2.5f, cap = StrokeCap.Butt)
+        drawLine(refColor, a, b, strokeWidth = lineStroke, cap = StrokeCap.Butt)
+        val len = (b - a).getDistance()
+        if (len > 0f) {
+            val n = Offset(-(b.y - a.y) / len, (b.x - a.x) / len) * tickHalf
+            listOf(a, b).forEach { p ->
+                drawLine(halo, p - n, p + n, strokeWidth = lineStroke * 2.5f)
+                drawLine(refColor, p - n, p + n, strokeWidth = lineStroke)
+            }
+        }
         if (editingReference) {
+            // Hollow rings: the endpoint itself stays visible inside the handle.
             listOf(a, b).forEach {
-                drawCircle(Color.White, handleR, it)
-                drawCircle(Color.Black.copy(alpha = 0.7f), handleR * 0.55f, it)
+                drawCircle(Color.Black.copy(alpha = 0.5f), handleR, it, style = Stroke(width = ringStroke * 2.5f))
+                drawCircle(Color.White, handleR, it, style = Stroke(width = ringStroke))
             }
         }
 
         fun marker(m: SpeedMarker, label: String) {
             val c = px(m.position)
-            drawCircle(Color.White, markerR, c, style = Stroke(width = lineStroke))
-            drawLine(Color.White, c - Offset(markerR * 0.6f, 0f), c + Offset(markerR * 0.6f, 0f), strokeWidth = lineStroke / 2f)
-            drawLine(Color.White, c - Offset(0f, markerR * 0.6f), c + Offset(0f, markerR * 0.6f), strokeWidth = lineStroke / 2f)
+            drawCircle(Color.Black.copy(alpha = 0.5f), markerR, c, style = Stroke(width = ringStroke * 2.5f))
+            drawCircle(Color.White, markerR, c, style = Stroke(width = ringStroke))
+            // Crosshair with an open center so the ball stays visible.
+            listOf(Offset(1f, 0f), Offset(-1f, 0f), Offset(0f, 1f), Offset(0f, -1f)).forEach { d ->
+                drawLine(Color.White, c + d * (markerR * 0.35f), c + d * (markerR * 0.9f), strokeWidth = ringStroke)
+            }
             val text = String.format(Locale.US, "%s · F %d", label, m.frameIndex)
             val tw = labelPaint.measureText(text)
             val fm = labelPaint.fontMetrics
@@ -687,5 +716,57 @@ internal fun SpeedOverlay(
         }
         speed.markerA?.let { marker(it, "A") }
         speed.markerB?.let { marker(it, "B") }
+    }
+}
+
+/**
+ * Magnifier shown while dragging a Speed-mode handle or marker, so the point under the finger
+ * stays visible. [frame] is the TextureView snapshot (unrotated, view resolution); [focus] is the
+ * point of interest in unrotated normalized coordinates. Drawn in display orientation.
+ */
+@Composable
+internal fun SpeedLoupe(
+    frame: ImageBitmap,
+    focus: Offset,
+    speed: SpeedState,
+    rotationDegrees: Int,
+    modifier: Modifier = Modifier,
+    zoom: Float = 3f,
+) {
+    val density = LocalDensity.current
+    val border = with(density) { 2.dp.toPx() }
+    val hair = with(density) { 1.dp.toPx() }
+    Canvas(modifier = modifier.size(128.dp)) {
+        val r = size.minDimension / 2f
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val fw = frame.width.toFloat()
+        val fh = frame.height.toFloat()
+        fun bmp(p: Offset) = Offset(p.x * fw, p.y * fh)
+        val circle = Path().apply { addOval(androidx.compose.ui.geometry.Rect(center, r)) }
+        drawCircle(Color.Black, r, center)
+        clipPath(circle) {
+            withTransform({
+                translate(center.x, center.y)
+                rotate(rotationDegrees.toFloat(), pivot = Offset.Zero)
+                scale(zoom, zoom, pivot = Offset.Zero)
+                val f = bmp(focus)
+                translate(-f.x, -f.y)
+            }) {
+                drawImage(frame)
+                val w = hair / zoom
+                if (speed.step == SpeedStep.REFERENCE) {
+                    drawLine(Color.White, bmp(speed.referenceStart), bmp(speed.referenceEnd), strokeWidth = w)
+                }
+                listOfNotNull(speed.markerA, speed.markerB).forEach { m ->
+                    drawCircle(Color.White, 10f / zoom * density.density, bmp(m.position), style = Stroke(width = w))
+                }
+            }
+        }
+        // Crosshair at the focus point, with an open center.
+        val gap = r * 0.12f
+        listOf(Offset(1f, 0f), Offset(-1f, 0f), Offset(0f, 1f), Offset(0f, -1f)).forEach { d ->
+            drawLine(Color(0xFFFF1744), center + d * gap, center + d * (r * 0.45f), strokeWidth = hair)
+        }
+        drawCircle(Color.White, r - border / 2f, center, style = Stroke(width = border))
     }
 }

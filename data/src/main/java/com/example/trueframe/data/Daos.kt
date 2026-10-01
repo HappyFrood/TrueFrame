@@ -36,6 +36,10 @@ interface ProjectDao {
     @Query("UPDATE projects SET name = :name, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateName(id: Long, name: String, updatedAt: Long)
 
+    /** Frame-rate metadata backfill. Leaves `updatedAt` alone so the project list order doesn't change. */
+    @Query("UPDATE projects SET frameRate = :frameRate, captureFps = :captureFps WHERE id = :id")
+    suspend fun updateFrameRates(id: Long, frameRate: Float?, captureFps: Float?)
+
     @Delete
     suspend fun delete(project: ProjectEntity)
 }

@@ -45,5 +45,6 @@ private class FakeProjectDao : ProjectDao {
     override suspend fun updateLastPosition(id: Long, positionMs: Long, updatedAt: Long) {}
     override suspend fun updateRotation(id: Long, rotationDegrees: Int, updatedAt: Long) {}
     override suspend fun updateName(id: Long, name: String, updatedAt: Long) {}
+    override suspend fun updateFrameRates(id: Long, frameRate: Float?, captureFps: Float?) {}
     override suspend fun delete(project: ProjectEntity) {}
 }

@@ -14,6 +14,10 @@ data class ProjectEntity(
     val transcodeState: String = "PENDING",   // PENDING | RUNNING | COMPLETE | ERROR
     val rotationDegrees: Int = 0,
     val lastPositionMs: Long = 0L,
+    /** Playback frame rate of the original file, read at import (null until known). */
+    val frameRate: Float? = null,
+    /** `METADATA_KEY_CAPTURE_FRAMERATE` of the original file (slow-motion), read at import. */
+    val captureFps: Float? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

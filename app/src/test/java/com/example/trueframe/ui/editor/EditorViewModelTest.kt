@@ -343,6 +343,53 @@ class EditorViewModelTest {
     }
 
     @Test
+    fun speedMode_markersAndReferenceMoveRelatively() {
+        val vm = initializedViewModel()
+        vm.onPlayerFrameRate(240f)
+        vm.setSourceSize(1920f, 1080f)
+        vm.enterSpeedMode()
+
+        vm.offsetReferenceHandle(1, Offset(0.1f, 0f))
+        assertEquals(0.8f, vm.uiState.value.speed!!.referenceEnd.x, 1e-4f)
+        assertEquals(0.3f, vm.uiState.value.speed!!.referenceStart.x, 1e-4f)
+
+        vm.speedNext()
+        vm.submitKnownLength("45")
+        vm.placeSpeedMarker(Offset(0.2f, 0.5f)) // frame 0
+        vm.updatePlayerState(FrameMath.msForFrame(4, 240f), 10_000L, false)
+        vm.offsetSpeedMarker(Offset(0.05f, -0.1f))
+
+        val a = vm.uiState.value.speed!!.markerA!!
+        assertEquals(0.25f, a.position.x, 1e-4f)
+        assertEquals(0.4f, a.position.y, 1e-4f)
+        assertEquals("dragging re-stamps the marker with the shown frame", 4, a.frameIndex)
+    }
+
+    @Test
+    fun frameRates_storedOnProjectAreUsedWithoutProbing() {
+        projectDao.project = projectDao.project!!.copy(frameRate = 30f, captureFps = 240f)
+        probe.result = VideoProbe.Result(computedFps = 99f, captureFps = 99f)
+        val vm = initializedViewModel()
+        vm.onPlayerFrameRate(null)
+
+        assertEquals(30f, vm.uiState.value.frameRate)
+        assertEquals(240f, vm.uiState.value.captureFps)
+        assertEquals(0, probe.calls)
+    }
+
+    @Test
+    fun frameRates_probedFromOriginalFileAndBackfilled() {
+        projectDao.project = projectDao.project!!.copy(videoUri = "file:///original.mp4", proxyUri = "file:///proxy.mp4")
+        probe.result = VideoProbe.Result(computedFps = 30f, captureFps = 240f)
+        val vm = initializedViewModel()
+
+        assertEquals(listOf("file:///original.mp4"), probe.uris)
+        assertEquals(240f, vm.uiState.value.captureFps)
+        assertEquals(30f, projectDao.project!!.frameRate)
+        assertEquals(240f, projectDao.project!!.captureFps)
+    }
+
+    @Test
     fun speedMode_tooShortReferenceBlocksNext() {
         val vm = initializedViewModel()
         vm.setSourceSize(1920f, 1080f)
@@ -365,6 +412,7 @@ class EditorViewModelTest {
         assertTrue(vm.uiState.value.speed!!.fpsConfirmed)
 
         probe.result = VideoProbe.Result(computedFps = null, captureFps = null)
+        projectDao.project = projectDao.project!!.copy(frameRate = null, captureFps = null) // undo the backfill
         val assumed = newViewModel().also { it.initialize(PROJECT_ID) }
         assumed.enterSpeedMode()
         assertFalse(assumed.uiState.value.speed!!.fpsConfirmed)
@@ -379,7 +427,9 @@ class EditorViewModelTest {
 
 private class FakeProbe : VideoMetadataProbe {
     var result = VideoProbe.Result(computedFps = null, captureFps = null)
-    override suspend fun probe(uri: String): VideoProbe.Result = result
+    val uris = mutableListOf<String>()
+    val calls get() = uris.size
+    override suspend fun probe(uri: String): VideoProbe.Result = result.also { uris += uri }
 }
 
 private class FakeProjectDao : ProjectDao {
@@ -398,6 +448,9 @@ private class FakeProjectDao : ProjectDao {
     }
     override suspend fun updateName(id: Long, name: String, updatedAt: Long) {
         project = project?.takeIf { it.id == id }?.copy(name = name, updatedAt = updatedAt) ?: project
+    }
+    override suspend fun updateFrameRates(id: Long, frameRate: Float?, captureFps: Float?) {
+        project = project?.takeIf { it.id == id }?.copy(frameRate = frameRate, captureFps = captureFps) ?: project
     }
     override suspend fun delete(project: ProjectEntity) { this.project = null }
 }
