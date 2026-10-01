@@ -1,11 +1,13 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.example.trueframe.ui.editor
 
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +40,6 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.TextFields
@@ -75,7 +76,10 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,22 +101,14 @@ private val tabular: TextStyle
 
 // ------------------------------------------------------------------ Readouts
 
+/** Compact time readout, seconds to 0.1: `1.2 / 3.0`. */
 internal fun timeReadout(positionMs: Long, durationMs: Long): String =
-    String.format(Locale.US, "%.2f / %.2f s", positionMs / 1000f, durationMs / 1000f)
+    String.format(Locale.US, "%.1f / %.1f", positionMs / 1000f, durationMs / 1000f)
 
-internal fun frameReadout(
-    frameIdx: Int,
-    fps: Float,
-    fpsAssumed: Boolean,
-    selectedDrawnFrame: Int?,
-    captureFps: Float? = null,
-): String = when {
-    selectedDrawnFrame != null -> String.format(Locale.US, "F %d · drawn F %d", frameIdx, selectedDrawnFrame)
-    // Slow-motion saved at a lower playback rate: show the real-time capture rate.
-    captureFps != null && captureFps > fps + 0.5f -> String.format(Locale.US, "F %d · %.0f fps slo-mo", frameIdx, captureFps)
-    fpsAssumed -> String.format(Locale.US, "F %d · fps?", frameIdx)
-    else -> String.format(Locale.US, "F %d · %.0f fps", frameIdx, fps)
-}
+/** Compact frame readout: `482`, or `482 · drawn 310` when a shape is selected. */
+internal fun frameReadout(frameIdx: Int, selectedDrawnFrame: Int?): String =
+    if (selectedDrawnFrame != null) String.format(Locale.US, "%d · drawn %d", frameIdx, selectedDrawnFrame)
+    else frameIdx.toString()
 
 @Composable
 internal fun ScrubSlider(
@@ -148,7 +144,7 @@ internal fun ScrubRow(
         modifier = modifier.fillMaxWidth().height(40.dp).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(timeText, style = tabular, color = contentColor, maxLines = 1, modifier = Modifier.widthIn(min = 84.dp))
+        Text(timeText, style = tabular, color = contentColor, maxLines = 1, modifier = Modifier.widthIn(min = 56.dp))
         ScrubSlider(positionMs, durationMs, onScrub, onScrubFinished, Modifier.weight(1f).padding(horizontal = 6.dp))
         Text(frameText, style = tabular, color = contentColor, maxLines = 1)
     }
@@ -190,7 +186,7 @@ private fun TransportButton(icon: ImageVector, description: String, size: Dp, ic
 
 // ------------------------------------------------------------------ Tools
 
-internal enum class Tool { LINE, ANGLE, CIRCLE, ARROW, TEXT, GHOST, SPEED, GRID, DELETE }
+internal enum class Tool { LINE, ANGLE, CIRCLE, ARROW, TEXT, GHOST, GRID, DELETE }
 
 internal data class ToolSpec(val tool: Tool, val icon: ImageVector, val description: String, val tint: Color?)
 
@@ -204,7 +200,6 @@ internal val ToolGroups: List<List<ToolSpec>> = listOf(
     ),
     listOf(
         ToolSpec(Tool.GHOST, Icons.Default.Layers, "Ghost Frame", null),
-        ToolSpec(Tool.SPEED, Icons.Default.Speed, "Speed Calculator", null),
         ToolSpec(Tool.GRID, Icons.Default.GridOn, "Grid", null),
     ),
     listOf(
@@ -213,7 +208,12 @@ internal val ToolGroups: List<List<ToolSpec>> = listOf(
 )
 
 /** Tool state the rows need: which toggles are on and whether Delete is enabled. */
-internal data class ToolState(val ghostOn: Boolean, val gridOn: Boolean, val canDelete: Boolean)
+internal data class ToolState(
+    val ghostOn: Boolean,
+    val gridOn: Boolean,
+    val canDelete: Boolean,
+    val hasAnnotations: Boolean,
+)
 
 @Composable
 internal fun ToolButton(
@@ -221,21 +221,23 @@ internal fun ToolButton(
     state: ToolState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: () -> Unit = {},
 ) {
     val active = when (spec.tool) {
         Tool.GHOST -> state.ghostOn
         Tool.GRID -> state.gridOn
         else -> false
     }
-    val enabled = spec.tool != Tool.DELETE || state.canDelete
+    if (spec.tool == Tool.DELETE) {
+        DeleteButton(state, onClick, onLongClick, modifier)
+        return
+    }
     val tint = when {
-        spec.tool == Tool.DELETE -> if (enabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
         active -> MaterialTheme.colorScheme.primary
         else -> spec.tint ?: MaterialTheme.colorScheme.onSurfaceVariant
     }
     IconButton(
         onClick = onClick,
-        enabled = enabled,
         modifier = modifier
             .size(ToolButtonSize)
             .clip(CircleShape)
@@ -246,13 +248,48 @@ internal fun ToolButton(
 }
 
 /**
- * Portrait tool row (48dp): `Line · Angle · Circle · Arrow · Text | Ghost · Speed · Grid | Delete`.
+ * Trash: tap deletes the selected annotation, long-press asks to delete all annotations.
+ * Enabled whenever the project has annotations; red when a shape is selected.
+ */
+@Composable
+private fun DeleteButton(state: ToolState, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier) {
+    val haptics = LocalHapticFeedback.current
+    val enabled = state.hasAnnotations
+    val tint = when {
+        state.canDelete -> MaterialTheme.colorScheme.error
+        enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(ToolButtonSize)
+            .clip(CircleShape)
+            .combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClickLabel = "Delete selected annotation",
+                onLongClickLabel = "Delete all annotations",
+                onClick = onClick,
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                },
+            ),
+    ) {
+        Icon(Icons.Default.Delete, contentDescription = "Delete annotation (long-press: delete all)", tint = tint)
+    }
+}
+
+/**
+ * Portrait tool row (48dp): `Line · Angle · Circle · Arrow · Text | Ghost · Grid | Delete`.
  * Fixed slots; scrolls horizontally instead of shrinking targets below 44dp on narrow screens.
  */
 @Composable
 internal fun ToolRow(
     state: ToolState,
     onTool: (Tool) -> Unit,
+    onDeleteAll: () -> Unit,
     modifier: Modifier = Modifier,
     ghostAnchor: @Composable () -> Unit = {},
 ) {
@@ -270,7 +307,7 @@ internal fun ToolRow(
                 if (groupIdx > 0) VerticalDivider(modifier = Modifier.height(24.dp).padding(horizontal = 2.dp))
                 group.forEach { spec ->
                     Box {
-                        ToolButton(spec, state, onClick = { onTool(spec.tool) })
+                        ToolButton(spec, state, onClick = { onTool(spec.tool) }, onLongClick = onDeleteAll)
                         if (spec.tool == Tool.GHOST) ghostAnchor()
                     }
                 }
@@ -285,6 +322,7 @@ internal fun ToolRow(
 internal fun ToolGrid(
     state: ToolState,
     onTool: (Tool) -> Unit,
+    onDeleteAll: () -> Unit,
     modifier: Modifier = Modifier,
     ghostAnchor: @Composable () -> Unit = {},
 ) {
@@ -295,7 +333,7 @@ internal fun ToolGrid(
     ) {
         ToolGroups.flatten().forEach { spec ->
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                ToolButton(spec, state, onClick = { onTool(spec.tool) })
+                ToolButton(spec, state, onClick = { onTool(spec.tool) }, onLongClick = onDeleteAll)
                 if (spec.tool == Tool.GHOST) ghostAnchor()
             }
         }

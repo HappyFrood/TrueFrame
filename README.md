@@ -154,9 +154,9 @@ The editor holds the frame rate in `EditorUiState` (`frameRate`, `frameRateSourc
 
 1. the player's reported `videoFormat.frameRate`, when positive;
 2. otherwise the rate stored on the project, computed by `VideoProbe` (frame count / duration from `MediaMetadataRetriever`, falling back to counting samples with `MediaExtractor`);
-3. otherwise 30 fps, marked **assumed** — the readout then shows `fps?`.
+3. otherwise 30 fps, marked **assumed** — the Speed Calculator then shows the fps as *Unconfirmed* until the user picks one.
 
-`VideoProbe` also reads `METADATA_KEY_CAPTURE_FRAMERATE` (`captureFps`), used by the Speed Calculator and shown in the readout as `F 482 · 240 fps slo-mo` when it exceeds the playback rate. Frame-rate metadata is always read from the **original** imported file, never the proxy: MediaMuxer does not carry the capture-rate tag (`com.android.capture.fps`) into the remux. It is read once at import (and backfilled on first load for older projects) and stored on `ProjectEntity`.
+`VideoProbe` also reads `METADATA_KEY_CAPTURE_FRAMERATE` (`captureFps`), used by the Speed Calculator (pre-filled fps). Frame-rate metadata is always read from the **original** imported file, never the proxy: MediaMuxer does not carry the capture-rate tag (`com.android.capture.fps`) into the remux. It is read once at import (and backfilled on first load for older projects) and stored on `ProjectEntity`.
 
 ### Playback & Rotation
 
@@ -208,7 +208,7 @@ Freezes one frame (e.g. address) and shows it semi-transparent over the video wh
 
 ### Speed Calculator
 
-Estimates ball speed in **mph** from an object of known length in the frame. A step-by-step Speed mode replaces the tool row with `Cancel · step · Back · Next`; annotation tap/drag is disabled, while the scrub bar and frame stepping stay active. A slim banner floats over the video.
+Estimates ball speed in **mph** from an object of known length in the frame. Opened from the **Speed** icon in the header (highlighted while active; tap again to exit). A step-by-step Speed mode replaces the tool row with `Cancel · step · Back · Next`; annotation tap/drag is disabled, while the scrub bar and frame stepping stay active. A slim banner floats over the video.
 
 1. **Reference** — drag a temporary white line onto an object of known length. Endpoints are marked with perpendicular ticks inside hollow rings, so the end of the object stays visible.
 2. **Known length** — enter the length in inches (1–600); quick-fill chips: Driver 45", Tennis racket 27", Baseball bat 33", Pickleball paddle 16".
@@ -244,11 +244,11 @@ Toggle in the tool row (highlighted when on). 8 square columns across the displa
 - **Subdued Slate Dark Theme** — dark background (`#121316`), surface (`#191B1F`), and crisp near-white primary text (`#E3E5E8`).
 - **Project List Thumbnails & FPS** — project list items feature cached `64dp × 48dp` JPEG thumbnails (`cacheDir/thumbs/thumb_<id>.jpg`) and display duration and frame rate (e.g. `14.9s · 240 fps`).
 - **Editor layout (portrait)** — chrome is kept to ~200dp so the video gets the rest of the screen on a pure black background:
-  1. **Header (48dp)** — Back · project name (one line, tap to rename) · Focus · Rotate · Share · ⋮ (*Rename*, *Clear all annotations*).
+  1. **Header (48dp)** — Back · project name (one line, tap to rename) · Focus · Speed · Rotate · Share · ⋮ (*Rename*).
   2. **Video area** — all remaining space.
-  3. **Scrub row (~40dp)** — `1.23 / 3.00 s` · slider · `F 482 · 240 fps` (`F 482 · drawn F 310` when a shape is selected, `fps?` when the rate is assumed), tabular figures.
+  3. **Scrub row (~40dp)** — `1.2 / 3.0` (seconds) · slider · frame number `482` (`482 · drawn 310` when a shape is selected), tabular figures. Kept compact: no units or fps tag.
   4. **Transport row (52dp)** — −10, −1, Play/Pause, +1, +10.
-  5. **Tool row (48dp)** — `Line · Angle · Circle · Arrow · Text | Ghost · Speed · Grid | Delete`, 44dp fixed slots with dividers; scrolls horizontally on narrow screens instead of shrinking targets.
+  5. **Tool row (48dp)** — `Line · Angle · Circle · Arrow · Text | Ghost · Grid | Delete`, 44dp fixed slots with dividers; scrolls horizontally on narrow screens instead of shrinking targets. **Delete:** tap removes the selected shape; **long-press** asks to delete all annotations.
 - **Focus mode** — the header's fullscreen icon hides the header and tool row and enters immersive mode (transient swipe-to-show system bars). A translucent scrub + transport strip overlays the bottom of the video; a small exit button sits top-right, and system Back exits Focus mode first. Annotations keep working.
 - **Landscape** — the video fills the full height on the left; a ~200dp right-side panel holds Back + name, Rotate/Share/⋮, the scrub slider with labels, transport (5 × 40dp) and the tools in a 3-column grid.
 - **Overlays never resize the video** — the Speed banner and result card, Ghost popover and chip, and dialogs float over the video area; the Speed wizard row replaces the tool row at the same height.

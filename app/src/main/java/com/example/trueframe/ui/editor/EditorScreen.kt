@@ -1,4 +1,5 @@
 @file:Suppress("UnsafeOptInUsageError")
+@file:OptIn(ExperimentalLayoutApi::class)
 
 package com.example.trueframe.ui.editor
 
@@ -18,6 +19,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -41,12 +44,14 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
@@ -368,12 +373,21 @@ fun EditorScreen(
             Tool.ARROW -> viewModel.addArrow()
             Tool.TEXT -> viewModel.openAddTextDialog()
             Tool.GHOST -> onGhostTapped(GhostMenuAnchor.BUTTON)
-            Tool.SPEED -> {
-                exoPlayer?.pause()
-                viewModel.enterSpeedMode()
-            }
             Tool.GRID -> viewModel.toggleGrid()
-            Tool.DELETE -> viewModel.deleteSelectedAnnotation()
+            Tool.DELETE -> if (uiState.selectedAnnotationId != null) {
+                viewModel.deleteSelectedAnnotation()
+            } else {
+                coroutineScope.launch { snackbarHostState.showSnackbar("Select a shape to delete, or long-press to delete all") }
+            }
+        }
+    }
+
+    fun toggleSpeedMode() {
+        if (uiState.speed != null) {
+            viewModel.exitSpeedMode()
+        } else {
+            exoPlayer?.pause()
+            viewModel.enterSpeedMode()
         }
     }
 
@@ -470,19 +484,32 @@ fun EditorScreen(
     // ------------------------------------------------------------------ Shared pieces
 
     val timeText = timeReadout(if (isScrubbing) scrubPositionMs else currentPositionMs, totalDurationMs)
-    val frameText = frameReadout(
-        currentFrameIdx, frameRate, uiState.frameRateAssumed, uiState.selectedAnnotation?.frameIndex, uiState.captureFps,
-    )
+    val frameText = frameReadout(currentFrameIdx, uiState.selectedAnnotation?.frameIndex)
     val sliderMs = if (isScrubbing) scrubPositionMs else currentPositionMs
     val toolState = ToolState(
         ghostOn = uiState.isGhostOn,
         gridOn = uiState.showGrid,
         canDelete = uiState.selectedAnnotationId != null,
+        hasAnnotations = uiState.annotations.isNotEmpty(),
     )
 
     val headerActions: @Composable () -> Unit = {
         IconButton(onClick = { focusMode = true }, modifier = Modifier.size(ToolButtonSize)) {
             Icon(Icons.Default.Fullscreen, contentDescription = "Focus mode")
+        }
+        val speedOn = uiState.speed != null
+        IconButton(
+            onClick = ::toggleSpeedMode,
+            modifier = Modifier
+                .size(ToolButtonSize)
+                .clip(CircleShape)
+                .background(if (speedOn) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent),
+        ) {
+            Icon(
+                Icons.Default.Speed,
+                contentDescription = "Speed Calculator",
+                tint = if (speedOn) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+            )
         }
         IconButton(onClick = { viewModel.rotateVideo() }, modifier = Modifier.size(ToolButtonSize)) {
             Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = "Rotate Video")
@@ -500,14 +527,6 @@ fun EditorScreen(
                     onClick = {
                         showOverflow = false
                         openRename()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Clear all annotations") },
-                    enabled = uiState.annotations.isNotEmpty(),
-                    onClick = {
-                        showOverflow = false
-                        showClearConfirm = true
                     },
                 )
             }
@@ -540,9 +559,9 @@ fun EditorScreen(
                 )
             }
         } else if (landscape) {
-            ToolGrid(toolState, ::onTool, ghostAnchor = { ghostMenu(GhostMenuAnchor.BUTTON) })
+            ToolGrid(toolState, ::onTool, onDeleteAll = { showClearConfirm = true }, ghostAnchor = { ghostMenu(GhostMenuAnchor.BUTTON) })
         } else {
-            ToolRow(toolState, ::onTool, ghostAnchor = { ghostMenu(GhostMenuAnchor.BUTTON) })
+            ToolRow(toolState, ::onTool, onDeleteAll = { showClearConfirm = true }, ghostAnchor = { ghostMenu(GhostMenuAnchor.BUTTON) })
         }
     }
 
@@ -884,7 +903,7 @@ fun EditorScreen(
                                 modifier = Modifier.weight(1f).clickable(onClick = ::openRename),
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { headerActions() }
+                        FlowRow(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { headerActions() }
                         Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                             Text(timeText, style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"), maxLines = 1)
                             Text(frameText, style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"), maxLines = 1)
