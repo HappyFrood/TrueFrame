@@ -216,7 +216,7 @@ Estimates ball speed in **mph** from an object of known length in the frame. Ope
 4. **Ball end** — step forward and tap the ball again (marker **B**; Next requires a different frame).
 5. **Result card** — speed, detail line, fps chips (30/60/120/240/480 + custom, live recalculation), *Redo ball*, *Add as label* (creates a persistent Text annotation at B on B's frame) and *Done*.
 
-Handles and markers move **relative** to the finger (they never jump under it, so you can grab slightly off the point), and a 3× magnifier with a crosshair appears on the opposite side of the video while dragging. Markers can be dragged as well as tapped; dragging re-stamps the marker with the frame currently shown.
+Handles and markers move **relative** to the finger (they never jump under it, so you can grab slightly off the point), and a 3× magnifier with a crosshair appears on the opposite side of the video from the moment the finger touches down. In the ball steps a touch places the marker (or grabs it when near) and the same motion nudges it; dragging re-stamps the marker with the frame currently shown. While Speed mode is active, a band around the working point is excluded from the system edge back-gesture (`systemGestureExclusion`) so points near the left/right edge can be dragged.
 
 The calibration is kept for the session ("Use previous reference" skips steps 1–2). Reference line and markers are temporary and never exported.
 

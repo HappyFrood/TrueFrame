@@ -13,6 +13,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -84,6 +87,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -577,6 +581,7 @@ fun EditorScreen(
             val density = LocalDensity.current.density
             val handleTouchPx = with(LocalDensity.current) { 24.dp.toPx() }
             val speedHandleTouchPx = with(LocalDensity.current) { 36.dp.toPx() }
+            val exclusionHalfPx = with(LocalDensity.current) { 100.dp.toPx() }
             val shapeTouchPx = with(LocalDensity.current) { 20.dp.toPx() }
             val hitPaint = remember { TextPill.newPaint() }
 
@@ -617,12 +622,7 @@ fun EditorScreen(
                         detectTapGestures { tap ->
                             val state = latestState
                             val speedState = state.speed
-                            if (speedState != null) {
-                                if (speedState.step == SpeedStep.BALL_START || speedState.step == SpeedStep.BALL_END) {
-                                    viewModel.placeSpeedMarker(unrotated(tap))
-                                }
-                                return@detectTapGestures
-                            }
+                            if (speedState != null) return@detectTapGestures // handled by the Speed handler
                             val shapes = pixelShapes()
                             val hitIdx = findHitShape(shapes, textRects(shapes), tap, shapeTouchPx)
                             val hitItem = hitIdx?.let { state.annotations.getOrNull(it) }
@@ -638,39 +638,7 @@ fun EditorScreen(
                             onDragStart = { startOffset ->
                                 val state = latestState
                                 val speedState = state.speed
-                                if (speedState != null) {
-                                    fun px(p: Offset) = p.rotateNorm(state.rotationDegrees).let { Offset(it.x * vw, it.y * vh) }
-                                    speedDrag = when (speedState.step) {
-                                        SpeedStep.REFERENCE -> {
-                                            val a = px(speedState.referenceStart)
-                                            val b = px(speedState.referenceEnd)
-                                            val da = (startOffset - a).getDistance()
-                                            val db = (startOffset - b).getDistance()
-                                            when {
-                                                da <= speedHandleTouchPx && da <= db -> SpeedDragTarget.REF_START
-                                                db <= speedHandleTouchPx -> SpeedDragTarget.REF_END
-                                                HitTesting.distanceTo(AnnotationShape.Line(a, b), startOffset) <= shapeTouchPx -> SpeedDragTarget.REF_LINE
-                                                else -> null
-                                            }
-                                        }
-                                        SpeedStep.BALL_START, SpeedStep.BALL_END -> {
-                                            val marker = if (speedState.step == SpeedStep.BALL_START) speedState.markerA else speedState.markerB
-                                            // Grab an existing marker near the finger and move it relative to the finger,
-                                            // otherwise drop it where the drag started and move it from there.
-                                            if (marker == null || (startOffset - px(marker.position)).getDistance() > speedHandleTouchPx * 1.5f) {
-                                                viewModel.placeSpeedMarker(unrotated(startOffset))
-                                            } else {
-                                                viewModel.offsetSpeedMarker(Offset.Zero)
-                                            }
-                                            SpeedDragTarget.MARKER
-                                        }
-                                        else -> null
-                                    }
-                                    if (speedDrag != null && speedDrag != SpeedDragTarget.REF_LINE) {
-                                        loupeFrame = textureView?.bitmap?.asImageBitmap()
-                                    }
-                                    return@detectDragGestures
-                                }
+                                if (speedState != null) return@detectDragGestures // handled by the Speed handler
                                 viewModel.onDragStarted()
                                 val shapes = pixelShapes()
                                 val rects = textRects(shapes)
@@ -694,18 +662,7 @@ fun EditorScreen(
                                 val unrotatedPos = unrotated(change.position)
                                 val unrotatedDelta = Offset(dragAmount.x / vw, dragAmount.y / vh).rotateVectorNorm(-rotation)
 
-                                if (latestState.speed != null) {
-                                    // Relative moves: the point never jumps under the finger, so the
-                                    // user can grab slightly off the end and still see it.
-                                    when (speedDrag) {
-                                        SpeedDragTarget.REF_START -> viewModel.offsetReferenceHandle(0, unrotatedDelta)
-                                        SpeedDragTarget.REF_END -> viewModel.offsetReferenceHandle(1, unrotatedDelta)
-                                        SpeedDragTarget.REF_LINE -> viewModel.offsetReference(unrotatedDelta)
-                                        SpeedDragTarget.MARKER -> viewModel.offsetSpeedMarker(unrotatedDelta)
-                                        null -> Unit
-                                    }
-                                    return@detectDragGestures
-                                }
+                                if (latestState.speed != null) return@detectDragGestures
 
                                 activeDragTarget?.let { (id, handleIdx) ->
                                     // The aspect correction for the handle update needs to be the original aspect
@@ -715,22 +672,90 @@ fun EditorScreen(
                                 }
                             },
                             onDragEnd = {
-                                speedDrag = null
-                                loupeFrame = null
                                 val draggedId = activeDragTarget?.first ?: activeShapeDragId
                                 activeDragTarget = null
                                 activeShapeDragId = null
                                 if (latestState.speed == null) viewModel.persistAnnotationsOnDragEnd(draggedId)
                             },
                             onDragCancel = {
-                                speedDrag = null
-                                loupeFrame = null
                                 activeDragTarget = null
                                 activeShapeDragId = null
                                 viewModel.onDragCancelled()
                             }
                         )
-                    },
+                    }
+                    // Speed mode: one handler that reacts on touch-down (no slop), so the loupe
+                    // appears immediately and markers can be placed and nudged in one motion.
+                    .pointerInput(vw, vh, speedHandleTouchPx, shapeTouchPx) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val state = latestState
+                            val speedState = state.speed ?: return@awaitEachGesture
+                            fun px(p: Offset) = p.rotateNorm(state.rotationDegrees).let { Offset(it.x * vw, it.y * vh) }
+                            val target = when (speedState.step) {
+                                SpeedStep.REFERENCE -> {
+                                    val a = px(speedState.referenceStart)
+                                    val b = px(speedState.referenceEnd)
+                                    val da = (down.position - a).getDistance()
+                                    val db = (down.position - b).getDistance()
+                                    when {
+                                        da <= speedHandleTouchPx && da <= db -> SpeedDragTarget.REF_START
+                                        db <= speedHandleTouchPx -> SpeedDragTarget.REF_END
+                                        HitTesting.distanceTo(AnnotationShape.Line(a, b), down.position) <= shapeTouchPx -> SpeedDragTarget.REF_LINE
+                                        else -> null
+                                    }
+                                }
+                                SpeedStep.BALL_START, SpeedStep.BALL_END -> {
+                                    val marker = if (speedState.step == SpeedStep.BALL_START) speedState.markerA else speedState.markerB
+                                    // Grab a marker near the finger and move it relative to the finger;
+                                    // otherwise drop it where the finger touched.
+                                    if (marker == null || (down.position - px(marker.position)).getDistance() > speedHandleTouchPx * 1.5f) {
+                                        viewModel.placeSpeedMarker(unrotated(down.position))
+                                    } else {
+                                        viewModel.offsetSpeedMarker(Offset.Zero)
+                                    }
+                                    SpeedDragTarget.MARKER
+                                }
+                                else -> null
+                            } ?: return@awaitEachGesture
+                            down.consume()
+                            speedDrag = target
+                            if (target != SpeedDragTarget.REF_LINE) loupeFrame = textureView?.bitmap?.asImageBitmap()
+                            try {
+                                while (true) {
+                                    val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        change.consume()
+                                        break
+                                    }
+                                    val d = change.positionChange()
+                                    if (d != Offset.Zero) {
+                                        change.consume()
+                                        // Relative moves: the point never jumps under the finger.
+                                        val delta = Offset(d.x / vw, d.y / vh).rotateVectorNorm(-latestState.rotationDegrees)
+                                        when (target) {
+                                            SpeedDragTarget.REF_START -> viewModel.offsetReferenceHandle(0, delta)
+                                            SpeedDragTarget.REF_END -> viewModel.offsetReferenceHandle(1, delta)
+                                            SpeedDragTarget.REF_LINE -> viewModel.offsetReference(delta)
+                                            SpeedDragTarget.MARKER -> viewModel.offsetSpeedMarker(delta)
+                                        }
+                                    }
+                                }
+                            } finally {
+                                speedDrag = null
+                                loupeFrame = null
+                            }
+                        }
+                    }
+                    // Keep Android's edge back-gesture away from the Speed points so drags near the
+                    // left/right edge reach the app (the system honours ~200dp per edge).
+                    .then(
+                        if (speed != null) {
+                            Modifier.systemGestureExclusion { coords ->
+                                speedExclusionRect(speed, uiState.rotationDegrees, coords.size.width.toFloat(), coords.size.height.toFloat(), exclusionHalfPx)
+                            }
+                        } else Modifier
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 if (exoPlayer != null) {
@@ -994,4 +1019,23 @@ private fun findHitShape(
         }
     }
     return bestIndex
+}
+
+/**
+ * Vertical band (full width, ±[halfPx]) around the point the user is working on in Speed mode,
+ * excluded from the system back gesture. Kept to one band so it stays within the ~200dp the
+ * system honours per edge.
+ */
+private fun speedExclusionRect(speed: SpeedState, rotation: Int, w: Float, h: Float, halfPx: Float): Rect {
+    val focus = when (speed.step) {
+        SpeedStep.REFERENCE -> Offset(
+            (speed.referenceStart.x + speed.referenceEnd.x) / 2f,
+            (speed.referenceStart.y + speed.referenceEnd.y) / 2f,
+        )
+        SpeedStep.BALL_START -> speed.markerA?.position
+        SpeedStep.BALL_END -> speed.markerB?.position ?: speed.markerA?.position
+        else -> null
+    } ?: Offset(0.5f, 0.5f)
+    val y = focus.rotateNorm(rotation).y * h
+    return Rect(0f, (y - halfPx).coerceAtLeast(0f), w, (y + halfPx).coerceAtMost(h))
 }
